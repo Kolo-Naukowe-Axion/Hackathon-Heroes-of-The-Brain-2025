@@ -8,11 +8,11 @@ from pylsl import StreamInlet, resolve_byprop
 from scipy.signal import welch
 from collections import deque
 import torch.nn as nn
+from resnet_model import ResNetMLP
 
 # --- 1. KONFIGURACJA ---
-MODEL_PATH = 'emotion_model.pth'
-SCALER_PATH = 'scaler.pkl'
-ENCODER_PATH = 'label_encoder.pkl'
+MODEL_PATH = 'model_v2/resnet_weights.pth'
+COMPONENTS_PATH = 'model_v2/ml_components.pkl'
 BUFFER_LENGTH = 250  # ok. 1 sekunda przy 250Hz
 FS = 250             # Częstotliwość próbkowania BrainAccess
 
@@ -23,6 +23,15 @@ BANDS = {
     'alpha': (8, 13),
     'beta': (13, 30),
     'gamma': (30, 45)
+}
+
+# Mapowanie klas (Zaktualizowane dla modelu 4-klasowego)
+# TODO: Zweryfikować mapowanie z użytkownikiem
+EMOTION_MAP = {
+    0: "Neutral",
+    1: "Happy",
+    2: "Sad",
+    3: "Angry"
 }
 
 # --- 2. DEFINICJA MODELU ---
@@ -74,22 +83,34 @@ class EmotionDetector:
         
         # Stan
         self.current_emotion = "WAITING..."
-        self.current_probs = [0.0, 0.0, 0.0] # Neg, Neu, Pos
-        self.history = deque(maxlen=30) # Ostatnie 30 odczytów (1 na sek)
+        self.current_probs = [0.0, 0.0, 0.0, 0.0] 
+        self.history = deque(maxlen=30) 
         
         # Ładowanie AI
         try:
-            self.scaler = joblib.load(SCALER_PATH)
-            self.le = joblib.load(ENCODER_PATH)
-            self.input_dim = self.scaler.mean_.shape[0]
-            self.num_classes = len(self.le.classes_)
+            print("Ładowanie komponentów ML...")
+            components = joblib.load(COMPONENTS_PATH)
+            self.scaler = components['scaler']
+            self.poly = components['poly']
             
-            self.model = SimpleEmotionMLP(self.input_dim, num_classes=self.num_classes)
-            self.model.load_state_dict(torch.load(MODEL_PATH))
+            # Wymiary
+            # Scaler oczekuje wejścia po transformacji wielomianowej (230 cech)
+            self.input_dim = self.scaler.mean_.shape[0] 
+            self.num_classes = 4
+            
+            print(f"Inicjalizacja modelu ResNet (Input: {self.input_dim}, Classes: {self.num_classes})...")
+            self.model = ResNetMLP(input_dim=self.input_dim, num_classes=self.num_classes)
+            
+            # Ładowanie wag
+            # map_location='cpu' na wszelki wypadek
+            self.model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device('cpu')))
             self.model.eval()
             print("Model załadowany pomyślnie.")
+            
         except Exception as e:
             print(f"Błąd ładowania modelu: {e}")
+            import traceback
+            traceback.print_exc()
             self.model = None
 
     def start(self):
@@ -108,7 +129,7 @@ class EmotionDetector:
         with self.lock:
             return {
                 "emotion": self.current_emotion,
-                "probabilities": self.current_probs, # [Neg, Neu, Pos]
+                "probabilities": self.current_probs,
                 "history": list(self.history)
             }
 
@@ -124,7 +145,6 @@ class EmotionDetector:
         print("Połączono z BrainAccess!")
         
         raw_buffer = deque(maxlen=BUFFER_LENGTH)
-        feature_buffer = deque(maxlen=30) # Do adaptacyjnej normalizacji
         prediction_buffer = deque(maxlen=5) # Do wygładzania
         
         while self.running:
@@ -135,40 +155,37 @@ class EmotionDetector:
                         raw_buffer.append(sample)
                     
                     if len(raw_buffer) == BUFFER_LENGTH:
-                        # 1. Ekstrakcja (Logarytm)
-                        features = extract_band_powers(raw_buffer, FS)
+                        # 1. Ekstrakcja cech (20 cech: 4 kanały * 5 pasm)
+                        # Zakładamy, że stream ma 4 kanały. Jeśli więcej, weźmiemy pierwsze 4.
+                        # Jeśli mniej, to problem.
+                        raw_data = np.array(raw_buffer)
+                        if raw_data.shape[1] > 4:
+                            raw_data = raw_data[:, :4]
                         
-                        # Fix wymiarów
-                        if features.shape[1] != self.input_dim:
-                            features_fixed = np.zeros((1, self.input_dim))
-                            min_dim = min(features.shape[1], self.input_dim)
-                            features_fixed[:, :min_dim] = features[:, :min_dim]
-                            features = features_fixed
-
-                        # 2. Adaptacyjna Normalizacja
-                        feature_buffer.append(features[0])
-                        if len(feature_buffer) < 10:
-                            with self.lock:
-                                self.current_emotion = "CALIBRATING..."
-                            continue
-                            
-                        buff_array = np.array(feature_buffer)
-                        mean = np.mean(buff_array, axis=0)
-                        std = np.std(buff_array, axis=0)
-                        std[std == 0] = 1.0
-                        features_scaled = (features - mean) / std
+                        features = extract_band_powers(raw_data, FS) # Shape (1, 20)
                         
-                        # 3. Inferencja
+                        # 2. Transformacja Wielomianowa (20 -> 230)
+                        poly_features = self.poly.transform(features)
+                        
+                        # 3. Normalizacja
+                        scaled_features = self.scaler.transform(poly_features)
+                        
+                        # 4. Inferencja
                         with torch.no_grad():
-                            input_tensor = torch.tensor(features_scaled, dtype=torch.float32)
+                            input_tensor = torch.tensor(scaled_features, dtype=torch.float32)
                             logits = self.model(input_tensor)
                             probs = torch.softmax(logits, dim=1).numpy()[0]
                         
-                        # 4. Wygładzanie
+                        # 5. Wygładzanie
                         prediction_buffer.append(probs)
                         avg_probs = np.mean(prediction_buffer, axis=0)
                         pred_idx = np.argmax(avg_probs)
-                        label = self.le.inverse_transform([pred_idx])[0]
+                        
+                        # Mapowanie na etykietę
+                        label = EMOTION_MAP.get(pred_idx, f"Unknown-{pred_idx}")
+                        
+                        # Logowanie dla debugowania
+                        # print(f"Raw Pred: {pred_idx} ({label}) | Probs: {avg_probs}")
                         
                         # Aktualizacja stanu
                         with self.lock:
@@ -190,7 +207,7 @@ class EmotionDetector:
         print("Uruchomiono tryb symulacji.")
         
         # Mockowe emocje do cyklicznego przełączania
-        mock_emotions = ["Neutral", "Happy", "Sad", "Angry", "Calm"]
+        mock_emotions = ["neutral", "happy", "sad", "angry"]
         current_mock_idx = 0
         last_switch_time = time.time()
         
@@ -202,16 +219,13 @@ class EmotionDetector:
             
             emotion = mock_emotions[current_mock_idx]
             
-            # Generuj losowe prawdopodobieństwa z przewagą dla obecnej emocji
-            probs = [0.1, 0.1, 0.1] # Placeholder, bo model ma 3 klasy (zazwyczaj)
-            # Ale w kodzie wyżej jest num_classes=3. 
-            # Zakładamy mapowanie: 0->Neg, 1->Neu, 2->Pos (zazwyczaj tak jest w prostych modelach walencji)
-            # Ale tutaj `label_encoder` decyduje.
-            # W mocku po prostu zwracamy label.
+            # Generuj losowe prawdopodobieństwa
+            probs = [0.1] * 4
+            probs[current_mock_idx] = 0.7
             
             with self.lock:
                 self.current_emotion = emotion
-                self.current_probs = [0.33, 0.33, 0.33] # Dummy values
+                self.current_probs = probs
                 self.history.append({
                     "time": time.time(),
                     "probs": self.current_probs,

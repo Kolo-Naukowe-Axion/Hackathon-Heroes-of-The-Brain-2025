@@ -17,12 +17,15 @@ const SCOPES = ["streaming", "user-read-email", "user-read-private", "user-read-
 
 function App() {
   const [emotionIndex, setEmotionIndex] = useState(0); // 0 = Neutral
+  const [pendingEmotionIndex, setPendingEmotionIndex] = useState(0); // Store next emotion
   const [token, setToken] = useState("");
   const [play, setPlay] = useState(false);
   const [activeUri, setActiveUri] = useState("");
   const [playlistTracks, setPlaylistTracks] = useState({});
   const [playerError, setPlayerError] = useState(null);
   const [isTokenValidated, setIsTokenValidated] = useState(false);
+
+  const currentTrackId = React.useRef(null);
 
   // Logowanie PKCE
   useEffect(() => {
@@ -84,7 +87,7 @@ function App() {
             case 'angry': newIndex = 4; break;
             default: break; // Keep current if unknown
           }
-          setEmotionIndex(newIndex);
+          setPendingEmotionIndex(newIndex);
         }
       } catch (e) {
         console.error("Error parsing WebSocket message:", e);
@@ -122,17 +125,24 @@ function App() {
       }
 
       switch (event.key.toLowerCase()) {
-        case 'n': setEmotionIndex(0); break; // Neutral
-        case 'c': setEmotionIndex(1); break; // Calm
-        case 'h': setEmotionIndex(2); break; // Happy
-        case 's': setEmotionIndex(3); break; // Sad
-        case 'a': setEmotionIndex(4); break; // Angry
+        case 'n': setPendingEmotionIndex(0); break; // Neutral
+        case 'c': setPendingEmotionIndex(1); break; // Calm
+        case 'h': setPendingEmotionIndex(2); break; // Happy
+        case 's': setPendingEmotionIndex(3); break; // Sad
+        case 'a': setPendingEmotionIndex(4); break; // Angry
         default: break;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  // If music is NOT playing, update emotion immediately
+  useEffect(() => {
+    if (!play) {
+      setEmotionIndex(pendingEmotionIndex);
+    }
+  }, [pendingEmotionIndex, play]);
 
   const currentEmotion = emotions[emotionIndex];
 
@@ -354,6 +364,22 @@ function App() {
               if (state.isActive && state.status === 'READY') {
                 if (state.isPlaying !== play) {
                   setPlay(state.isPlaying);
+                }
+
+                // --- NEW LOGIC: DETECT SONG CHANGE ---
+                if (state.track && state.track.id) {
+                  // If we have a current track ID and it's different from the new one
+                  // It means the song has changed (or started)
+                  if (currentTrackId.current && currentTrackId.current !== state.track.id) {
+                    // Song changed!
+                    // If we have a pending emotion that is different from current, apply it now
+                    if (pendingEmotionIndex !== emotionIndex) {
+                      console.log("Song changed, applying pending emotion:", pendingEmotionIndex);
+                      setEmotionIndex(pendingEmotionIndex);
+                    }
+                  }
+                  // Update current track ID
+                  currentTrackId.current = state.track.id;
                 }
               }
             }}
