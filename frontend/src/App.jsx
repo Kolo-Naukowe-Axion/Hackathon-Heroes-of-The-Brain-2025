@@ -8,6 +8,7 @@ import { emotions } from './utils/emotions';
 import { BrainHero } from './components/BrainHero';
 import { BackgroundParticles } from './components/BackgroundParticles';
 import { redirectToAuthCodeFlow, getAccessToken } from './utils/auth';
+import { fetchPlaylistTracks } from './utils/spotify';
 
 // --- KONFIGURACJA ---
 const CLIENT_ID = "00ea48b1e2144865828b75c3d4746b7c"; // <--- PAMIĘTAJ O WPISANIU ID!
@@ -19,6 +20,7 @@ function App() {
   const [token, setToken] = useState("");
   const [play, setPlay] = useState(false);
   const [activeUri, setActiveUri] = useState("");
+  const [playlistTracks, setPlaylistTracks] = useState({});
 
   // Logowanie PKCE
   useEffect(() => {
@@ -73,11 +75,32 @@ function App() {
     }
   }, [emotionIndex]);
 
+  // Fetch tracks for current emotion's playlists
+  useEffect(() => {
+    if (token && currentEmotion) {
+      currentEmotion.playlists.forEach(playlist => {
+        // Only fetch if we haven't already (optional optimization, but good for rate limits)
+        if (!playlistTracks[playlist.uri]) {
+          fetchPlaylistTracks(token, playlist.uri).then(tracks => {
+            if (tracks && tracks.length > 0) {
+              setPlaylistTracks(prev => ({
+                ...prev,
+                [playlist.uri]: tracks
+              }));
+            }
+          });
+        }
+      });
+    }
+  }, [currentEmotion, token]);
+
   return (
     <div className="min-h-screen bg-black text-white font-sans selection:bg-white/30">
 
       {/* 1. SEKCJA 3D (GÓRA) */}
-      <div className="relative h-[55vh] w-full overflow-hidden">
+      <div className="relative h-[70vh] w-full overflow-hidden">
+
+
         <div className="absolute inset-0 z-0">
           <Canvas camera={{ position: [0, 0, 5], fov: 60 }}>
             <color attach="background" args={['#050505']} />
@@ -91,7 +114,7 @@ function App() {
         </div>
 
         {/* TYTUŁ EMOCJI */}
-        <div className="relative z-10 h-full flex flex-col items-center justify-center pointer-events-none">
+        <div className="relative z-10 h-full flex flex-col items-center justify-start pt-12 pointer-events-none">
           <AnimatePresence mode='wait'>
             <motion.div
               key={currentEmotion.name}
@@ -126,46 +149,73 @@ function App() {
 
       {/* 2. SEKCJA WYBORU PLAYLISTY (DÓŁ) */}
       {token && (
-        <div className="relative z-10 w-full min-h-[45vh] bg-gradient-to-b from-black to-gray-900 flex flex-col items-center pt-8 pb-32">
+        <div className="relative z-10 w-full min-h-[60vh] bg-black flex flex-col items-center pt-8 pb-32">
 
-          <h2 className="text-gray-400 text-sm uppercase tracking-widest mb-6">
-            Recommended Soundscapes for {currentEmotion.name}
-          </h2>
+          {/* TŁO Z GWIAZDAMI (DÓŁ) */}
+          <div className="absolute inset-0 z-0">
+            <Canvas camera={{ position: [0, 0, 5], fov: 60 }}>
+              <color attach="background" args={['#000000']} />
+              <BackgroundParticles color={currentEmotion.color} />
+            </Canvas>
+          </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 px-4 max-w-5xl w-full">
-            {currentEmotion.playlists.map((playlist) => (
-              <button
-                key={playlist.uri}
-                onClick={() => {
-                  setActiveUri(playlist.uri);
-                  setPlay(true);
-                }}
-                className={`
-                  relative overflow-hidden group p-6 rounded-2xl border transition-all duration-300 text-left
-                  ${activeUri === playlist.uri
-                    ? `border-white bg-white/10 scale-105 shadow-[0_0_30px_rgba(255,255,255,0.1)]`
-                    : 'border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/30'}
-                `}
-                style={{ borderColor: activeUri === playlist.uri ? currentEmotion.color : '' }}
-              >
-                <div className="flex flex-col h-full justify-between">
-                  <div>
-                    <h3 className="text-xl font-bold text-white mb-1">{playlist.title}</h3>
-                    <p className="text-xs text-gray-400">Curated for {currentEmotion.energy} energy</p>
+          <div className="relative z-10 w-full flex flex-col items-center">
+            <h2 className="text-gray-400 text-sm uppercase tracking-widest mb-6">
+              Recommended Soundscapes for {currentEmotion.name}
+            </h2>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 px-4 max-w-5xl w-full">
+              {currentEmotion.playlists.map((playlist) => (
+                <button
+                  key={playlist.uri}
+                  onClick={() => {
+                    setActiveUri(playlist.uri);
+                    setPlay(true);
+                  }}
+                  className={`
+                    relative overflow-hidden group p-6 rounded-2xl border transition-all duration-300 text-left h-full
+                    ${activeUri === playlist.uri
+                      ? `border-white bg-white/10 scale-105 shadow-[0_0_30px_rgba(255,255,255,0.1)]`
+                      : 'border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/30'}
+                  `}
+                  style={{ borderColor: activeUri === playlist.uri ? currentEmotion.color : '' }}
+                >
+                  <div className="flex flex-col h-full justify-between relative z-10">
+                    <div className="mb-4">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h3 className="text-xl font-bold text-white mb-1">{playlist.title}</h3>
+                          <p className="text-xs text-gray-400">Curated for {currentEmotion.energy} energy</p>
+                        </div>
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${activeUri === playlist.uri ? 'bg-green-500 text-black' : 'bg-white/10 text-white'}`}>
+                          {activeUri === playlist.uri ? "▶" : "•"}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Song List Preview */}
+                    <div className="space-y-2 mt-2">
+                      {(playlistTracks[playlist.uri] || []).slice(0, 3).map((song, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-xs group/song">
+                          <span className="text-gray-300 font-medium group-hover/song:text-white transition-colors truncate max-w-[70%]">
+                            {song.title}
+                          </span>
+                          <span className="text-gray-500 group-hover/song:text-gray-400 transition-colors truncate max-w-[25%]">
+                            {song.artist}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
 
-                  <div className={`mt-4 w-8 h-8 rounded-full flex items-center justify-center transition-colors ${activeUri === playlist.uri ? 'bg-green-500 text-black' : 'bg-white/10 text-white'}`}>
-                    {activeUri === playlist.uri ? "▶" : "•"}
-                  </div>
-                </div>
-
-                {/* Glow effect based on emotion color */}
-                <div
-                  className="absolute -right-4 -bottom-4 w-24 h-24 blur-2xl opacity-20 rounded-full transition-colors duration-500"
-                  style={{ backgroundColor: currentEmotion.color }}
-                />
-              </button>
-            ))}
+                  {/* Glow effect based on emotion color */}
+                  <div
+                    className="absolute -right-4 -bottom-4 w-24 h-24 blur-2xl opacity-20 rounded-full transition-colors duration-500 pointer-events-none"
+                    style={{ backgroundColor: currentEmotion.color }}
+                  />
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -174,18 +224,20 @@ function App() {
       {token && (
         <div className="fixed bottom-0 left-0 right-0 z-50 bg-black/90 backdrop-blur-xl border-t border-white/10 p-2">
           <SpotifyPlayer
+            key={activeUri}
             token={token}
             uris={[activeUri]}
             play={play}
+            offset={0}
             callback={state => {
               if (!state.isPlaying) setPlay(false);
             }}
             styles={{
-              activeColor: currentEmotion.color,
+              activeColor: '#fff',
               bgColor: 'transparent',
               color: '#fff',
-              loaderColor: currentEmotion.color,
-              sliderColor: currentEmotion.color,
+              loaderColor: '#fff',
+              sliderColor: '#fff',
               trackArtistColor: '#999',
               trackNameColor: '#fff',
               height: '60px',

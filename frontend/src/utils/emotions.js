@@ -5,9 +5,21 @@ export const emotions = [
         mood: 'neutral',
         energy: 'balanced',
         playlists: [
-            { title: 'Focus Flow', uri: 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ' }, // Domyślna
-            { title: 'Ambient', uri: 'spotify:playlist:37i9dQZF1DWWQRwui0ExPn' },
-            { title: 'Binaural', uri: 'spotify:playlist:37i9dQZF1DX7EF8wVxbvhG' }
+            {
+                title: 'Deep Focus',
+                uri: 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ',
+                songs: []
+            },
+            {
+                title: 'Lo-Fi Beats',
+                uri: 'spotify:playlist:37i9dQZF1DWWQRwui0ExPn',
+                songs: []
+            },
+            {
+                title: 'Brain Food',
+                uri: 'spotify:playlist:37i9dQZF1DWXLeA8Omikj7',
+                songs: []
+            }
         ]
     },
     {
@@ -16,9 +28,21 @@ export const emotions = [
         mood: 'pleasant',
         energy: 'low',
         playlists: [
-            { title: 'Peaceful Mind', uri: 'spotify:playlist:37i9dQZF1EIgG2NEOhqsD7' },
-            { title: 'Deep Relax', uri: 'spotify:playlist:09C8ZGUepJGErYZcI7s2Ns' },
-            { title: 'Nature Sounds', uri: 'spotify:playlist:0TCihNXUDxErwxH6fUrqH2' }
+            {
+                title: 'Peaceful Piano',
+                uri: 'spotify:playlist:37i9dQZF1DX4sWSpwq3LiO',
+                songs: []
+            },
+            {
+                title: 'Sleep',
+                uri: 'spotify:playlist:37i9dQZF1DWZd79rJ6a7lp',
+                songs: []
+            },
+            {
+                title: 'Nature Sounds',
+                uri: 'spotify:playlist:37i9dQZF1DX4wta20PHgwo',
+                songs: []
+            }
         ]
     },
     {
@@ -27,9 +51,21 @@ export const emotions = [
         mood: 'pleasant',
         energy: 'high',
         playlists: [
-            { title: 'Good Vibes', uri: 'spotify:playlist:4pnXzlKEJwkjsB6JmhscTi' },
-            { title: 'Sunny Day', uri: 'spotify:playlist:0va12zjtBfg7S5KfmDlJuZ' },
-            { title: 'Energy Boost', uri: 'spotify:playlist:7gsnIlVe6nFrPRQAdOkrCS' }
+            {
+                title: 'Mood Booster',
+                uri: 'spotify:playlist:37i9dQZF1DX3rxVfibe1L0',
+                songs: []
+            },
+            {
+                title: 'Happy Hits',
+                uri: 'spotify:playlist:37i9dQZF1DXdPec7aLTmlC',
+                songs: []
+            },
+            {
+                title: 'Good Vibes',
+                uri: 'spotify:playlist:37i9dQZF1DWYBO1MoTDhZI',
+                songs: []
+            }
         ]
     },
     {
@@ -38,9 +74,21 @@ export const emotions = [
         mood: 'unpleasant',
         energy: 'low',
         playlists: [
-            { title: 'Melancholy', uri: 'spotify:playlist:5DVUEqRL1EV8I9n65eBaAw' },
-            { title: 'Rainy Days', uri: 'spotify:playlist:2ZnAWYy4AOs8tpRUCGF6Py' },
-            { title: 'Broken Heart', uri: 'spotify:playlist:5sMkYv7UJka4sPnovXWKHH' }
+            {
+                title: 'Life Sucks',
+                uri: 'spotify:playlist:37i9dQZF1DX3YSRoSdA634',
+                songs: []
+            },
+            {
+                title: 'Sad Songs',
+                uri: 'spotify:playlist:37i9dQZF1DX7qK8ma5wgG1',
+                songs: []
+            },
+            {
+                title: 'Broken Heart',
+                uri: 'spotify:playlist:37i9dQZF1DX889U0CL85jj',
+                songs: []
+            }
         ]
     },
     {
@@ -49,9 +97,21 @@ export const emotions = [
         mood: 'unpleasant',
         energy: 'high',
         playlists: [
-            { title: 'High Voltage', uri: 'spotify:playlist:37i9dQZF1DWWOaP4H0w5b0' },
-            { title: 'Rage Mode', uri: 'spotify:playlist:1GXRoQWlxTNQiMNkOe7RqA' },
-            { title: 'Adrenaline', uri: 'spotify:playlist:6IKQrtMc4c00YzONcUt7QH' }
+            {
+                title: 'Rage Beats',
+                uri: 'spotify:playlist:37i9dQZF1DX3oM43CtKnRV',
+                songs: []
+            },
+            {
+                title: 'Rock Hard',
+                uri: 'spotify:playlist:37i9dQZF1DWXRqgorJj26U',
+                songs: []
+            },
+            {
+                title: 'Metal Essentials',
+                uri: 'spotify:playlist:37i9dQZF1DWWOaP4H0w5b0',
+                songs: []
+            }
         ]
     },
 ];
