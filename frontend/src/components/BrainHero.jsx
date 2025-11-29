@@ -5,7 +5,7 @@ import * as THREE from 'three';
 
 export function BrainHero({ color }) {
     const meshRef = useRef();
-    const obj = useLoader(OBJLoader, '/models/brain.obj');
+    const obj = useLoader(OBJLoader, '/models/ultra_simplify_brain.obj');
 
     // Create a material that we will reuse
     const material = React.useMemo(() => {
