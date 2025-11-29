@@ -11,8 +11,8 @@ import torch.nn as nn
 from resnet_model import ResNetMLP
 
 # --- 1. KONFIGURACJA ---
-MODEL_PATH = 'model_v2/resnet_weights.pth'
-COMPONENTS_PATH = 'model_v2/ml_components.pkl'
+MODEL_PATH = 'model_v4/resnet_weights.pth'
+COMPONENTS_PATH = 'model_v4/ml_components.pkl'
 BUFFER_LENGTH = 250  # ok. 1 sekunda przy 250Hz
 FS = 250             # Częstotliwość próbkowania BrainAccess
 CONFIDENCE_THRESHOLD = 0.4 # Próg pewności dla emocji (jeśli mniej, to neutral)
