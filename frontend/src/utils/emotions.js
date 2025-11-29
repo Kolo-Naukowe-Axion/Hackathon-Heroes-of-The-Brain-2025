@@ -30,12 +30,12 @@ export const emotions = [
         playlists: [
             {
                 title: 'Instrumental',
-                uri: 'spotify:playlist:37i9dQZF1DX4sWSpwq3LiO',
+                uri: 'spotify:playlist:37i9dQZF1DX4sWSpwq3LiO', // Calm Vibes
                 songs: []
             },
             {
                 title: 'Standard',
-                uri: 'spotify:playlist:37i9dQZF1DX5bjCEbRU4SJ',
+                uri: 'spotify:playlist:5PoCStl1p2KypDNfHjpM9j', // Calm Hits (User Curated)
                 songs: []
             },
             {
@@ -76,7 +76,7 @@ export const emotions = [
         playlists: [
             {
                 title: 'Instrumental',
-                uri: 'spotify:playlist:37i9dQZF1DXaImRpG7HXqp',
+                uri: 'spotify:playlist:2SYQZPYbWDrKvDos8bpJHz', // Sad Instrumental Jazz
                 songs: []
             },
             {
@@ -109,7 +109,7 @@ export const emotions = [
             },
             {
                 title: 'For Kids',
-                uri: 'spotify:playlist:37i9dQZF1DXcr2UzLGERUU',
+                uri: 'spotify:playlist:37i9dQZF1DXaImRpG7HXqp', // Kids Dance Party (Generic)
                 songs: []
             }
         ]

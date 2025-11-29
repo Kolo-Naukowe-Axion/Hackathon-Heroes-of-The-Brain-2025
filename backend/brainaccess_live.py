@@ -85,7 +85,9 @@ class EmotionDetector:
         # Stan
         self.current_emotion = "WAITING..."
         self.current_probs = [0.0, 0.0, 0.0, 0.0] 
+        self.current_probs = [0.0, 0.0, 0.0, 0.0] 
         self.history = deque(maxlen=30) 
+        self.is_mock = False # Flag to indicate if running in simulation mode
         
         # Ładowanie AI
         try:
@@ -131,14 +133,23 @@ class EmotionDetector:
             return {
                 "emotion": self.current_emotion,
                 "probabilities": self.current_probs,
-                "history": list(self.history)
+                "emotion": self.current_emotion,
+                "probabilities": self.current_probs,
+                "history": list(self.history),
+                "is_mock": self.is_mock
             }
 
     def _run_loop(self):
         print("Szukanie strumienia EEG (LSL)...")
-        streams = resolve_byprop('type', 'EEG', timeout=2.0)
+        print("Upewnij się, że aplikacja BrainAccess Board jest uruchomiona i streamuje dane.")
+        streams = resolve_byprop('type', 'EEG', timeout=5.0) # Increased timeout
         if not streams:
             print("Nie znaleziono strumienia EEG! Przełączanie w tryb MOCK (symulacja).")
+            print("Sprawdź czy:")
+            print("1. Urządzenie jest włączone.")
+            print("2. Aplikacja BrainAccess Board streamuje (LSL).")
+            print("3. Jesteś w tej samej sieci (jeśli dotyczy).")
+            self.is_mock = True
             self._run_mock_loop()
             return
 
