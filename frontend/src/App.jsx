@@ -11,10 +11,27 @@ function App() {
   const [emotionIndex, setEmotionIndex] = useState(0);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setEmotionIndex((prev) => (prev + 1) % emotions.length);
-    }, 5000);
-    return () => clearInterval(interval);
+    const handleKeyDown = (event) => {
+      switch (event.key.toLowerCase()) {
+        case 'n':
+          setEmotionIndex(0); // Neutral
+          break;
+        case 'h':
+          setEmotionIndex(1); // Happy
+          break;
+        case 's':
+          setEmotionIndex(2); // Sad
+          break;
+        case 'a':
+          setEmotionIndex(3); // Angry
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   const currentEmotion = emotions[emotionIndex];
@@ -37,14 +54,14 @@ function App() {
       {/* UI Overlay */}
       <div className="relative z-10 flex flex-col items-center w-full">
         {/* Hero Section Spacer */}
-        <div className="h-screen flex flex-col items-center justify-center pointer-events-none">
+        <div className="h-screen flex flex-col items-center justify-start pt-32 pointer-events-none">
           <motion.h1
             key={currentEmotion.name}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
             transition={{ duration: 0.8 }}
-            className="text-6xl md:text-8xl font-bold tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-white/50 mt-80"
+            className="text-6xl md:text-8xl font-bold tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-white/50"
             style={{ textShadow: `0 0 30px ${currentEmotion.color}` }}
           >
             {currentEmotion.name}
