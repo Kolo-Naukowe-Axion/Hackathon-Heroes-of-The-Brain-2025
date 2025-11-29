@@ -9,8 +9,8 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.pyplot as plt
 import seaborn as sns
+import joblib
 
-# --- Configuration ---
 DATA_PATH = '/home/pawel/neur/Neurohackathon/archive(1)/emotions.csv'
 BATCH_SIZE = 64
 EPOCHS = 20
@@ -18,7 +18,6 @@ LEARNING_RATE = 0.001
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
 
-# --- Data Preprocessing ---
 class EmotionDataset(Dataset):
     def __init__(self, X, y):
         self.X = torch.tensor(X, dtype=torch.float32)
@@ -32,7 +31,11 @@ class EmotionDataset(Dataset):
 
 def load_and_preprocess_data(path):
     print(f"Loading data from {path}...")
-    df = pd.read_csv(path)
+    try:
+        df = pd.read_csv(path, on_bad_lines='skip')
+    except TypeError:
+        # Fallback for older pandas versions
+        df = pd.read_csv(path, error_bad_lines=False)
     
     # Separate features and labels
     X = df.drop('label', axis=1)
@@ -41,22 +44,37 @@ def load_and_preprocess_data(path):
     print(f"Data shape: {df.shape}")
     print(f"Classes: {y.unique()}")
     
-    # Encode labels
     le = LabelEncoder()
     y_encoded = le.fit_transform(y)
     print(f"Label mapping: {dict(zip(le.classes_, le.transform(le.classes_)))}")
+     
+    print("Clustering data to prevent leakage...")
+    from sklearn.cluster import KMeans
+    from sklearn.model_selection import GroupShuffleSplit
     
-    # Split data
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y_encoded, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y_encoded
-    )
+    # Use KMeans to group similar samples (likely from same time window)
+    # 50 clusters is a heuristic: assuming ~50 distinct "states" or time blocks
+    kmeans = KMeans(n_clusters=50, random_state=RANDOM_STATE, n_init=10)
+    clusters = kmeans.fit_predict(X)
+    
+    # Split based on CLUSTERS, not individual samples
+    gss = GroupShuffleSplit(n_splits=1, test_size=TEST_SIZE, random_state=RANDOM_STATE)
+    train_idx, test_idx = next(gss.split(X, y_encoded, groups=clusters))
+    
+    X_train = X.iloc[train_idx]
+    X_test = X.iloc[test_idx]
+    y_train = y_encoded[train_idx]
+    y_test = y_encoded[test_idx]
+    
+    print(f"Train set size: {len(X_train)}")
+    print(f"Test set size: {len(X_test)}")
     
     # Normalize features
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    return X_train_scaled, X_test_scaled, y_train, y_test, le
+    return X_train_scaled, X_test_scaled, y_train, y_test, le, scaler
 
 # --- Model Definition ---
 class SimpleEmotionMLP(nn.Module):
@@ -88,7 +106,7 @@ class SimpleEmotionMLP(nn.Module):
 # --- Training Loop ---
 def train_model():
     # 1. Load Data
-    X_train, X_test, y_train, y_test, le = load_and_preprocess_data(DATA_PATH)
+    X_train, X_test, y_train, y_test, le, scaler = load_and_preprocess_data(DATA_PATH)
     
     # 2. Create Datasets and Loaders
     train_dataset = EmotionDataset(X_train, y_train)
@@ -165,6 +183,11 @@ def train_model():
     # Save model
     torch.save(model.state_dict(), 'emotion_model.pth')
     print("Model saved to emotion_model.pth")
+    
+    # Save artifacts for real-time inference
+    joblib.dump(scaler, 'scaler.pkl')
+    joblib.dump(le, 'label_encoder.pkl')
+    print("Artifacts saved: scaler.pkl, label_encoder.pkl")
 
 if __name__ == "__main__":
     train_model()
