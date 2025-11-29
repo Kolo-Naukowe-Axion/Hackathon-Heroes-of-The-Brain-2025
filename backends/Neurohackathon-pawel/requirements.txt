@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+numpy
+torch
+joblib
+pandas
+pylsl
+scipy
+websockets

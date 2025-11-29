@@ -76,6 +76,7 @@ class EmotionDetector:
         self.current_emotion = "WAITING..."
         self.current_probs = [0.0, 0.0, 0.0] # Neg, Neu, Pos
         self.history = deque(maxlen=30) # Ostatnie 30 odczytów (1 na sek)
+        self.is_connected = False # Connection status
         
         # Ładowanie AI
         try:
@@ -109,7 +110,8 @@ class EmotionDetector:
             return {
                 "emotion": self.current_emotion,
                 "probabilities": self.current_probs, # [Neg, Neu, Pos]
-                "history": list(self.history)
+                "history": list(self.history),
+                "is_connected": self.is_connected
             }
 
     def _run_loop(self):
@@ -121,7 +123,10 @@ class EmotionDetector:
             return
 
         inlet = StreamInlet(streams[0])
+        inlet = StreamInlet(streams[0])
         print("Połączono z BrainAccess!")
+        with self.lock:
+            self.is_connected = True
         
         raw_buffer = deque(maxlen=BUFFER_LENGTH)
         feature_buffer = deque(maxlen=30) # Do adaptacyjnej normalizacji
@@ -188,9 +193,11 @@ class EmotionDetector:
         """Symuluje działanie detektora bez urządzenia."""
         import random
         print("Uruchomiono tryb symulacji.")
+        with self.lock:
+            self.is_connected = False
         
         # Mockowe emocje do cyklicznego przełączania
-        mock_emotions = ["Neutral", "Happy", "Sad", "Angry", "Calm"]
+        mock_emotions = ["NEGATIVE", "NEUTRAL", "POSITIVE"]
         current_mock_idx = 0
         last_switch_time = time.time()
         

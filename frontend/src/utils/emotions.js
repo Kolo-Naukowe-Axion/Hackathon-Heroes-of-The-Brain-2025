@@ -23,31 +23,8 @@ export const emotions = [
         ]
     },
     {
-        name: 'calm',
-        color: '#34D399', // Green/Teal
-        mood: 'pleasant',
-        energy: 'low',
-        playlists: [
-            {
-                title: 'Instrumental',
-                uri: 'spotify:playlist:37i9dQZF1DX4sWSpwq3LiO',
-                songs: []
-            },
-            {
-                title: 'Standard',
-                uri: 'spotify:playlist:37i9dQZF1DX5bjCEbRU4SJ',
-                songs: []
-            },
-            {
-                title: 'For Kids',
-                uri: 'spotify:playlist:0K7BHHVH6zRLuwZ9jOEncB',
-                songs: []
-            }
-        ]
-    },
-    {
-        name: 'happy',
-        color: '#FDE047', // Yellow
+        name: 'positive',
+        color: '#FDE047', // Yellow (Happy)
         mood: 'pleasant',
         energy: 'high',
         playlists: [
@@ -69,31 +46,8 @@ export const emotions = [
         ]
     },
     {
-        name: 'sad',
-        color: '#60A5FA', // Blue
-        mood: 'unpleasant',
-        energy: 'low',
-        playlists: [
-            {
-                title: 'Instrumental',
-                uri: 'spotify:playlist:37i9dQZF1DXaImRpG7HXqp',
-                songs: []
-            },
-            {
-                title: 'Standard',
-                uri: 'spotify:playlist:5SQRulT1igDqNMuyRahwJQ',
-                songs: []
-            },
-            {
-                title: 'For Kids',
-                uri: 'spotify:playlist:7pfUDjBvoR5IhurQ42CCgy',
-                songs: []
-            }
-        ]
-    },
-    {
-        name: 'angry',
-        color: '#F87171', // Red
+        name: 'negative',
+        color: '#F87171', // Red (Angry/Negative)
         mood: 'unpleasant',
         energy: 'high',
         playlists: [

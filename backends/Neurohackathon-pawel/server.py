@@ -6,7 +6,18 @@ import asyncio
 import json
 from brainaccess_live import EmotionDetector
 
-app = FastAPI()
+from contextlib import asynccontextmanager
+
+# Initialize detector
+detector = EmotionDetector()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    detector.start()
+    yield
+    detector.stop()
+
+app = FastAPI(lifespan=lifespan)
 
 # Configure CORS
 app.add_middleware(
@@ -19,17 +30,6 @@ app.add_middleware(
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Initialize detector
-detector = EmotionDetector()
-
-@app.on_event("startup")
-async def startup_event():
-    detector.start()
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    detector.stop()
 
 @app.get("/")
 async def read_index():
@@ -47,3 +47,7 @@ async def websocket_endpoint(websocket: WebSocket):
         print("Client disconnected")
     except Exception as e:
         print(f"WebSocket error: {e}")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
