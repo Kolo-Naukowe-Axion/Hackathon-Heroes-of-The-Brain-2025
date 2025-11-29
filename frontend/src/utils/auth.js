@@ -31,6 +31,12 @@ export async function getAccessToken(clientId, code, redirectUri) {
         body: params
     });
 
+    if (!result.ok) {
+        const errorData = await result.json();
+        console.error("Failed to get access token:", errorData);
+        return null;
+    }
+
     const { access_token } = await result.json();
     return access_token;
 }

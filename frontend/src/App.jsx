@@ -21,6 +21,7 @@ function App() {
   const [play, setPlay] = useState(false);
   const [activeUri, setActiveUri] = useState("");
   const [playlistTracks, setPlaylistTracks] = useState({});
+  const [playerError, setPlayerError] = useState(null);
 
   // Logowanie PKCE
   useEffect(() => {
@@ -46,6 +47,12 @@ function App() {
 
   const handleLogin = () => {
     redirectToAuthCodeFlow(CLIENT_ID, REDIRECT_URI, SCOPES);
+  };
+
+  const handleLogout = () => {
+    setToken("");
+    window.localStorage.removeItem("token");
+    window.location.href = "/"; // Refresh to clear state cleanly
   };
 
   // Klawiatura (Symulacja EEG)
@@ -124,8 +131,11 @@ function App() {
               className="text-center"
             >
               <h1
-                className="text-7xl md:text-9xl font-bold tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-white/10"
-                style={{ textShadow: `0 0 50px ${currentEmotion.color}` }}
+                className="text-7xl md:text-9xl font-bold tracking-tighter text-transparent bg-clip-text pb-4"
+                style={{
+                  backgroundImage: `linear-gradient(to bottom, #ffffff 30%, ${currentEmotion.color})`,
+                  textShadow: `0 0 25px ${currentEmotion.color}`
+                }}
               >
                 {currentEmotion.name}
               </h1>
@@ -142,6 +152,18 @@ function App() {
             <button onClick={handleLogin}
               className="px-8 py-4 bg-green-500 text-black font-bold rounded-full text-xl hover:scale-105 transition shadow-xl pointer-events-auto">
               CONNECT SPOTIFY
+            </button>
+          </div>
+        )}
+
+        {/* LOGOUT BUTTON (TOP RIGHT) */}
+        {token && (
+          <div className="absolute top-4 right-4 z-50">
+            <button
+              onClick={handleLogout}
+              className="px-4 py-2 bg-red-500/20 hover:bg-red-500/40 text-red-200 text-sm font-medium rounded-full backdrop-blur-md border border-red-500/30 transition-all"
+            >
+              DISCONNECT
             </button>
           </div>
         )}
@@ -223,22 +245,41 @@ function App() {
       {/* 3. ODTWARZACZ (FIXED) */}
       {token && (
         <div className="fixed bottom-0 left-0 right-0 z-50 bg-black/90 backdrop-blur-xl border-t border-white/10 p-2">
+          {playerError && (
+            <div className="bg-red-500/20 text-red-200 px-4 py-2 text-xs text-center mb-2 rounded border border-red-500/30">
+              Spotify Error: {playerError}
+            </div>
+          )}
           <SpotifyPlayer
-            key={activeUri}
             token={token}
-            uris={[activeUri]}
+            name="Brain Tunes"
+            uris={activeUri ? [activeUri] : []}
             play={play}
-            offset={0}
+            initialVolume={0.5}
+            persistDeviceSelection
+            autoPlay={true}
+            magnifySliderOnHover={true}
             callback={state => {
-              if (!state.isPlaying) setPlay(false);
+              if (state.isPlaying !== play) {
+                setPlay(state.isPlaying);
+              }
+
+              if (state.error) {
+                console.error("Spotify Player Error:", state.error);
+                setPlayerError(state.error);
+                if (state.errorType === 'authentication_error') {
+                  handleLogout();
+                }
+              }
             }}
             styles={{
-              activeColor: '#fff',
+              activeColor: '#1db954',
               bgColor: 'transparent',
               color: '#fff',
               loaderColor: '#fff',
-              sliderColor: '#fff',
-              trackArtistColor: '#999',
+              sliderColor: '#1db954',
+              sliderHandleColor: '#fff',
+              trackArtistColor: '#ccc',
               trackNameColor: '#fff',
               height: '60px',
             }}

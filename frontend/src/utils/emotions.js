@@ -6,18 +6,8 @@ export const emotions = [
         energy: 'balanced',
         playlists: [
             {
-                title: 'Deep Focus',
-                uri: 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ',
-                songs: []
-            },
-            {
-                title: 'Lo-Fi Beats',
-                uri: 'spotify:playlist:37i9dQZF1DWWQRwui0ExPn',
-                songs: []
-            },
-            {
-                title: 'Brain Food',
-                uri: 'spotify:playlist:37i9dQZF1DWXLeA8Omikj7',
+                title: 'Balanced Flow',
+                uri: 'spotify:playlist:0YcFmi7AedUHNL7SPOYCuP',
                 songs: []
             }
         ]
@@ -34,13 +24,13 @@ export const emotions = [
                 songs: []
             },
             {
-                title: 'Sleep',
-                uri: 'spotify:playlist:37i9dQZF1DWZd79rJ6a7lp',
+                title: 'Calm Vibes',
+                uri: 'spotify:playlist:37i9dQZF1DX5bjCEbRU4SJ',
                 songs: []
             },
             {
-                title: 'Nature Sounds',
-                uri: 'spotify:playlist:37i9dQZF1DX4wta20PHgwo',
+                title: 'Serenity Now',
+                uri: 'spotify:playlist:0K7BHHVH6zRLuwZ9jOEncB',
                 songs: []
             }
         ]
@@ -52,18 +42,18 @@ export const emotions = [
         energy: 'high',
         playlists: [
             {
-                title: 'Mood Booster',
-                uri: 'spotify:playlist:37i9dQZF1DX3rxVfibe1L0',
+                title: 'Joyful Mix',
+                uri: 'spotify:playlist:2mu4kG7W1LVjDh8SsxZBLF',
                 songs: []
             },
             {
-                title: 'Happy Hits',
-                uri: 'spotify:playlist:37i9dQZF1DXdPec7aLTmlC',
+                title: 'Upbeat Energy',
+                uri: 'spotify:playlist:5nRE43di91Z1APlH0z5rJl',
                 songs: []
             },
             {
-                title: 'Good Vibes',
-                uri: 'spotify:playlist:37i9dQZF1DWYBO1MoTDhZI',
+                title: 'Good Times',
+                uri: 'spotify:playlist:1ynJ63k9UYnKQWH2Q0KMml',
                 songs: []
             }
         ]
@@ -75,18 +65,18 @@ export const emotions = [
         energy: 'low',
         playlists: [
             {
-                title: 'Life Sucks',
-                uri: 'spotify:playlist:37i9dQZF1DX3YSRoSdA634',
+                title: 'Comforting Sounds',
+                uri: 'spotify:playlist:37i9dQZF1DXaImRpG7HXqp',
                 songs: []
             },
             {
-                title: 'Sad Songs',
-                uri: 'spotify:playlist:37i9dQZF1DX7qK8ma5wgG1',
+                title: 'Gentle Embrace',
+                uri: 'spotify:playlist:5SQRulT1igDqNMuyRahwJQ',
                 songs: []
             },
             {
-                title: 'Broken Heart',
-                uri: 'spotify:playlist:37i9dQZF1DX889U0CL85jj',
+                title: 'Healing Rhythms',
+                uri: 'spotify:playlist:7pfUDjBvoR5IhurQ42CCgy',
                 songs: []
             }
         ]
@@ -98,18 +88,18 @@ export const emotions = [
         energy: 'high',
         playlists: [
             {
-                title: 'Rage Beats',
-                uri: 'spotify:playlist:37i9dQZF1DX3oM43CtKnRV',
+                title: 'Cool Down',
+                uri: 'spotify:playlist:4FMOBw7eopNczgfzspCvIP',
                 songs: []
             },
             {
-                title: 'Rock Hard',
-                uri: 'spotify:playlist:37i9dQZF1DWXRqgorJj26U',
+                title: 'Release Tension',
+                uri: 'spotify:playlist:2aM2P6Yso6qdXSFC3hFumC',
                 songs: []
             },
             {
-                title: 'Metal Essentials',
-                uri: 'spotify:playlist:37i9dQZF1DWWOaP4H0w5b0',
+                title: 'Find Balance',
+                uri: 'spotify:playlist:37i9dQZF1DXcr2UzLGERUU',
                 songs: []
             }
         ]
