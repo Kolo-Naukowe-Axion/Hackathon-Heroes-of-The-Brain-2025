@@ -15,6 +15,7 @@ MODEL_PATH = 'model_v2/resnet_weights.pth'
 COMPONENTS_PATH = 'model_v2/ml_components.pkl'
 BUFFER_LENGTH = 250  # ok. 1 sekunda przy 250Hz
 FS = 250             # Częstotliwość próbkowania BrainAccess
+CONFIDENCE_THRESHOLD = 0.4 # Próg pewności dla emocji (jeśli mniej, to neutral)
 
 # Definicja pasm
 BANDS = {
@@ -28,10 +29,10 @@ BANDS = {
 # Mapowanie klas (Zaktualizowane dla modelu 4-klasowego)
 # TODO: Zweryfikować mapowanie z użytkownikiem
 EMOTION_MAP = {
-    0: "Neutral",
-    1: "Happy",
-    2: "Sad",
-    3: "Angry"
+    0: "neutral",
+    1: "happy",
+    2: "sad",
+    3: "angry"
 }
 
 # --- 2. DEFINICJA MODELU ---
@@ -182,7 +183,11 @@ class EmotionDetector:
                         pred_idx = np.argmax(avg_probs)
                         
                         # Mapowanie na etykietę
-                        label = EMOTION_MAP.get(pred_idx, f"Unknown-{pred_idx}")
+                        # Jeśli pewność jest zbyt niska, wracamy do neutralnego
+                        if avg_probs[pred_idx] < CONFIDENCE_THRESHOLD:
+                            label = "neutral" # Changed to "neutral" to match EMOTION_MAP
+                        else:
+                            label = EMOTION_MAP.get(pred_idx, f"Unknown-{pred_idx}")
                         
                         # Logowanie dla debugowania
                         # print(f"Raw Pred: {pred_idx} ({label}) | Probs: {avg_probs}")
