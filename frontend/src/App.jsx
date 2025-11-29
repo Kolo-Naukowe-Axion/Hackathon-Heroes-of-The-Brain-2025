@@ -71,8 +71,15 @@ function App() {
       </div>
 
       {/* Playlists Section */}
-      <div className="relative z-10 w-full min-h-screen bg-gradient-to-b from-black to-gray-900 flex flex-col items-center py-20">
-        <h2 className="text-4xl font-bold mb-10">Recommended Playlists</h2>
+      <div className="relative z-10 w-full min-h-screen bg-black flex flex-col items-center py-20">
+        <div className="text-center mb-16 max-w-2xl px-4">
+          <h2 className="text-3xl md:text-5xl font-light mb-6 text-white tracking-tight">
+            You seem to be in a <span style={{ color: currentEmotion.color }} className="font-normal">{currentEmotion.mood}</span> mood.
+          </h2>
+          <p className="text-lg md:text-xl text-gray-400 font-light tracking-wide">
+            Your energy seems to be <span className="text-gray-200">{currentEmotion.energy}</span>. Here are some music recommendations:
+          </p>
+        </div>
         <PlaylistGrid color={currentEmotion.color} />
       </div>
     </div>

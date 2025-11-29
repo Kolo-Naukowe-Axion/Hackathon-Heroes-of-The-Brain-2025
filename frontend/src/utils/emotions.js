@@ -1,9 +1,9 @@
 export const emotions = [
-    { name: 'Neutral', color: '#E5E7EB' }, // gray-200
-    { name: 'Happy', color: '#FACC15' },   // yellow-400
-    { name: 'Sad', color: '#1E3A8A' },     // blue-900
-    { name: 'Angry', color: '#DC2626' },   // red-600
-    { name: 'Calm', color: '#10B981' },    // emerald-500
+    { name: 'Neutral', color: '#F3F4F6', mood: 'neutral', energy: 'balanced' }, // gray-100
+    { name: 'Happy', color: '#FDE047', mood: 'good', energy: 'high' },   // yellow-300
+    { name: 'Sad', color: '#60A5FA', mood: 'bad', energy: 'low' },     // blue-400
+    { name: 'Angry', color: '#F87171', mood: 'bad', energy: 'high' },   // red-400
+    { name: 'Calm', color: '#34D399', mood: 'good', energy: 'low' },    // emerald-400
 ];
 
 export const getEmotionColor = (emotionName) => {
