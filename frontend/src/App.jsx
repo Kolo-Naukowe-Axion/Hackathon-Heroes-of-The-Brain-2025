@@ -46,6 +46,7 @@ function App() {
             <color attach="background" args={['#000000']} />
             <ambientLight intensity={0.5} />
             <pointLight position={[10, 10, 10]} intensity={1} />
+
             <BrainHero color={currentEmotion.color} />
             <BackgroundParticles color={currentEmotion.color} />
             <OrbitControls enableZoom={false} enablePan={false} />
@@ -61,12 +62,24 @@ function App() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
             transition={{ duration: 0.8 }}
-            className="text-6xl md:text-8xl font-bold tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-white/50"
-            style={{ textShadow: `0 0 30px ${currentEmotion.color}` }}
+            className="text-6xl md:text-9xl font-thin tracking-tighter"
+            style={{
+              color: 'transparent',
+              WebkitTextStroke: `2px ${currentEmotion.color}`,
+              textShadow: `0 0 20px ${currentEmotion.color}, 0 0 40px ${currentEmotion.color}`
+            }}
           >
             {currentEmotion.name}
           </motion.h1>
-          <p className="mt-4 text-xl text-gray-400">Current Vibe</p>
+          <p
+            className="mt-4 text-xl tracking-widest uppercase"
+            style={{
+              color: currentEmotion.color,
+              textShadow: `0 0 10px ${currentEmotion.color}`
+            }}
+          >
+            Current Vibe
+          </p>
         </div>
       </div>
 
