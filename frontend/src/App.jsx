@@ -37,24 +37,24 @@ function App() {
   const currentEmotion = emotions[emotionIndex];
 
   return (
-    <div className="relative min-h-screen bg-black text-white font-sans selection:bg-white/30">
-      {/* Fixed Background Canvas */}
-      <div className="fixed inset-0 z-0">
-        <Canvas camera={{ position: [0, 0, 5], fov: 60 }}>
-          <color attach="background" args={['#000000']} />
-          <ambientLight intensity={0.5} />
-          <pointLight position={[10, 10, 10]} intensity={1} />
-          <BrainHero color={currentEmotion.color} />
-          <BackgroundParticles color={currentEmotion.color} />
-          <OrbitControls enableZoom={false} enablePan={false} />
-          <Environment preset="city" />
-        </Canvas>
-      </div>
+    <div className="min-h-screen bg-black text-white font-sans selection:bg-white/30">
+      {/* Hero Section */}
+      <div className="relative h-screen w-full overflow-hidden">
+        {/* 3D Background for Hero */}
+        <div className="absolute inset-0 z-0">
+          <Canvas camera={{ position: [0, 0, 5], fov: 60 }}>
+            <color attach="background" args={['#000000']} />
+            <ambientLight intensity={0.5} />
+            <pointLight position={[10, 10, 10]} intensity={1} />
+            <BrainHero color={currentEmotion.color} />
+            <BackgroundParticles color={currentEmotion.color} />
+            <OrbitControls enableZoom={false} enablePan={false} />
+            <Environment preset="city" />
+          </Canvas>
+        </div>
 
-      {/* UI Overlay */}
-      <div className="relative z-10 flex flex-col items-center w-full">
-        {/* Hero Section Spacer */}
-        <div className="h-screen flex flex-col items-center justify-start pt-32 pointer-events-none">
+        {/* Hero Content Overlay */}
+        <div className="relative z-10 h-full flex flex-col items-center justify-start pt-32 pointer-events-none">
           <motion.h1
             key={currentEmotion.name}
             initial={{ opacity: 0, y: 20 }}
@@ -68,12 +68,12 @@ function App() {
           </motion.h1>
           <p className="mt-4 text-xl text-gray-400">Current Vibe</p>
         </div>
+      </div>
 
-        {/* Playlists Section */}
-        <div className="w-full min-h-screen bg-gradient-to-b from-transparent to-black/80 flex flex-col items-center py-20">
-          <h2 className="text-4xl font-bold mb-10">Recommended Playlists</h2>
-          <PlaylistGrid color={currentEmotion.color} />
-        </div>
+      {/* Playlists Section */}
+      <div className="relative z-10 w-full min-h-screen bg-gradient-to-b from-black to-gray-900 flex flex-col items-center py-20">
+        <h2 className="text-4xl font-bold mb-10">Recommended Playlists</h2>
+        <PlaylistGrid color={currentEmotion.color} />
       </div>
     </div>
   );
