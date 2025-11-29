@@ -6,8 +6,18 @@ export const emotions = [
         energy: 'balanced',
         playlists: [
             {
-                title: 'Balanced Flow',
+                title: 'Instrumental',
                 uri: 'spotify:playlist:0YcFmi7AedUHNL7SPOYCuP',
+                songs: []
+            },
+            {
+                title: 'Standard',
+                uri: 'spotify:playlist:34BelWDaOFBBqF0tWoDeuD',
+                songs: []
+            },
+            {
+                title: 'For Kids',
+                uri: 'spotify:playlist:1ynJ63k9UYnKQWH2Q0KMml',
                 songs: []
             }
         ]
@@ -19,17 +29,17 @@ export const emotions = [
         energy: 'low',
         playlists: [
             {
-                title: 'Peaceful Piano',
+                title: 'Instrumental',
                 uri: 'spotify:playlist:37i9dQZF1DX4sWSpwq3LiO',
                 songs: []
             },
             {
-                title: 'Calm Vibes',
+                title: 'Standard',
                 uri: 'spotify:playlist:37i9dQZF1DX5bjCEbRU4SJ',
                 songs: []
             },
             {
-                title: 'Serenity Now',
+                title: 'For Kids',
                 uri: 'spotify:playlist:0K7BHHVH6zRLuwZ9jOEncB',
                 songs: []
             }
@@ -42,17 +52,17 @@ export const emotions = [
         energy: 'high',
         playlists: [
             {
-                title: 'Joyful Mix',
+                title: 'Instrumental',
                 uri: 'spotify:playlist:2mu4kG7W1LVjDh8SsxZBLF',
                 songs: []
             },
             {
-                title: 'Upbeat Energy',
+                title: 'Standard',
                 uri: 'spotify:playlist:5nRE43di91Z1APlH0z5rJl',
                 songs: []
             },
             {
-                title: 'Good Times',
+                title: 'For Kids',
                 uri: 'spotify:playlist:1ynJ63k9UYnKQWH2Q0KMml',
                 songs: []
             }
@@ -65,17 +75,17 @@ export const emotions = [
         energy: 'low',
         playlists: [
             {
-                title: 'Comforting Sounds',
+                title: 'Instrumental',
                 uri: 'spotify:playlist:37i9dQZF1DXaImRpG7HXqp',
                 songs: []
             },
             {
-                title: 'Gentle Embrace',
+                title: 'Standard',
                 uri: 'spotify:playlist:5SQRulT1igDqNMuyRahwJQ',
                 songs: []
             },
             {
-                title: 'Healing Rhythms',
+                title: 'For Kids',
                 uri: 'spotify:playlist:7pfUDjBvoR5IhurQ42CCgy',
                 songs: []
             }
@@ -88,17 +98,17 @@ export const emotions = [
         energy: 'high',
         playlists: [
             {
-                title: 'Cool Down',
+                title: 'Instrumental',
                 uri: 'spotify:playlist:4FMOBw7eopNczgfzspCvIP',
                 songs: []
             },
             {
-                title: 'Release Tension',
+                title: 'Standard',
                 uri: 'spotify:playlist:2aM2P6Yso6qdXSFC3hFumC',
                 songs: []
             },
             {
-                title: 'Find Balance',
+                title: 'For Kids',
                 uri: 'spotify:playlist:37i9dQZF1DXcr2UzLGERUU',
                 songs: []
             }

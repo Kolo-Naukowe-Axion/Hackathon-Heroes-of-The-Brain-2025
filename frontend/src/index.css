@@ -9,3 +9,11 @@ body {
   color: white;
   overflow-x: hidden;
 }
+
+button {
+  cursor: pointer;
+}
+
+button:focus {
+  outline: none;
+}

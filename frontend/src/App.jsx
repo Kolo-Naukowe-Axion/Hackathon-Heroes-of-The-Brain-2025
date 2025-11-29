@@ -13,7 +13,7 @@ import { fetchPlaylistTracks } from './utils/spotify';
 // --- KONFIGURACJA ---
 const CLIENT_ID = "00ea48b1e2144865828b75c3d4746b7c"; // <--- PAMIĘTAJ O WPISANIU ID!
 const REDIRECT_URI = "http://127.0.0.1:5173/";
-const SCOPES = ["streaming", "user-read-email", "user-read-private", "user-modify-playback-state"];
+const SCOPES = ["streaming", "user-read-email", "user-read-private", "user-read-playback-state", "user-modify-playback-state"];
 
 function App() {
   const [emotionIndex, setEmotionIndex] = useState(0); // 0 = Neutral
@@ -22,6 +22,7 @@ function App() {
   const [activeUri, setActiveUri] = useState("");
   const [playlistTracks, setPlaylistTracks] = useState({});
   const [playerError, setPlayerError] = useState(null);
+  const [isTokenValidated, setIsTokenValidated] = useState(false);
 
   // Logowanie PKCE
   useEffect(() => {
@@ -32,6 +33,19 @@ function App() {
     const storedToken = window.localStorage.getItem("token");
     if (storedToken) {
       setToken(storedToken);
+      // Validate token AND scopes by checking a playback endpoint
+      fetch("https://api.spotify.com/v1/me/player/devices", {
+        headers: { Authorization: `Bearer ${storedToken}` }
+      }).then(res => {
+        if (res.status === 401 || res.status === 403) {
+          console.warn("Token expired or missing scopes, logging out...");
+          handleLogout();
+        } else {
+          setIsTokenValidated(true);
+        }
+      }).catch(err => {
+        console.error("Token validation failed:", err);
+      });
     }
 
     if (code && !storedToken) {
@@ -39,6 +53,7 @@ function App() {
         if (accessToken) {
           window.localStorage.setItem("token", accessToken);
           setToken(accessToken);
+          setIsTokenValidated(true); // Fresh token is valid
           window.history.replaceState({}, document.title, "/");
         }
       });
@@ -59,6 +74,13 @@ function App() {
   // N=Neutral, C=Calm, H=Happy, S=Sad, A=Angry
   useEffect(() => {
     const handleKeyDown = (event) => {
+      // Global Spacebar Pause/Play
+      if (event.code === 'Space') {
+        event.preventDefault(); // Prevent scrolling
+        setPlay(prev => !prev);
+        return;
+      }
+
       switch (event.key.toLowerCase()) {
         case 'n': setEmotionIndex(0); break; // Neutral
         case 'c': setEmotionIndex(1); break; // Calm
@@ -83,29 +105,60 @@ function App() {
   }, [emotionIndex]);
 
   // Fetch tracks for current emotion's playlists
+  // Fetch tracks for ALL emotions' playlists when token is available
+  // Fetch tracks for ALL emotions' playlists when token is available
   useEffect(() => {
-    if (token && currentEmotion) {
-      currentEmotion.playlists.forEach(playlist => {
-        // Only fetch if we haven't already (optional optimization, but good for rate limits)
-        if (!playlistTracks[playlist.uri]) {
-          fetchPlaylistTracks(token, playlist.uri).then(tracks => {
-            if (tracks && tracks.length > 0) {
-              setPlaylistTracks(prev => ({
-                ...prev,
-                [playlist.uri]: tracks
-              }));
-            }
-          });
-        }
+    if (token) {
+      emotions.forEach(emotion => {
+        emotion.playlists.forEach(playlist => {
+          // Only fetch if we haven't already
+          if (!playlistTracks[playlist.uri]) {
+            fetchPlaylistTracks(token, playlist.uri).then(tracks => {
+              if (tracks && tracks.length > 0) {
+                setPlaylistTracks(prev => ({
+                  ...prev,
+                  [playlist.uri]: tracks
+                }));
+              }
+            });
+          }
+        });
       });
     }
-  }, [currentEmotion, token]);
+  }, [token]);
 
   return (
     <div className="min-h-screen bg-black text-white font-sans selection:bg-white/30">
 
       {/* 1. SEKCJA 3D (GÓRA) */}
       <div className="relative h-[70vh] w-full overflow-hidden">
+
+        {/* HEADER (LOGO + DISCONNECT) */}
+        <div className="absolute top-0 left-0 right-0 z-50 flex justify-between items-center p-6 pointer-events-none">
+          {/* LOGO */}
+          <div className="pointer-events-auto select-none">
+            <img src="/logo_full.png" alt="Oscillate Logo" className="h-40 md:h-56 w-auto opacity-90" />
+          </div>
+
+          {/* DISCONNECT BUTTON */}
+          <div className="pointer-events-auto">
+            {token && (
+              <button
+                onClick={handleLogout}
+                className="px-4 py-2 text-sm font-medium rounded-full backdrop-blur-md border transition-all"
+                style={{
+                  backgroundColor: `${currentEmotion.color}33`,
+                  borderColor: `${currentEmotion.color}4d`,
+                  color: currentEmotion.color
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = `${currentEmotion.color}66`}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = `${currentEmotion.color}33`}
+              >
+                DISCONNECT
+              </button>
+            )}
+          </div>
+        </div>
 
 
         <div className="absolute inset-0 z-0">
@@ -156,17 +209,7 @@ function App() {
           </div>
         )}
 
-        {/* LOGOUT BUTTON (TOP RIGHT) */}
-        {token && (
-          <div className="absolute top-4 right-4 z-50">
-            <button
-              onClick={handleLogout}
-              className="px-4 py-2 bg-red-500/20 hover:bg-red-500/40 text-red-200 text-sm font-medium rounded-full backdrop-blur-md border border-red-500/30 transition-all"
-            >
-              DISCONNECT
-            </button>
-          </div>
-        )}
+
       </div>
 
       {/* 2. SEKCJA WYBORU PLAYLISTY (DÓŁ) */}
@@ -243,7 +286,7 @@ function App() {
       )}
 
       {/* 3. ODTWARZACZ (FIXED) */}
-      {token && (
+      {token && isTokenValidated && (
         <div className="fixed bottom-0 left-0 right-0 z-50 bg-black/90 backdrop-blur-xl border-t border-white/10 p-2">
           {playerError && (
             <div className="bg-red-500/20 text-red-200 px-4 py-2 text-xs text-center mb-2 rounded border border-red-500/30">
@@ -257,18 +300,20 @@ function App() {
             play={play}
             initialVolume={0.5}
             persistDeviceSelection
-            autoPlay={true}
             magnifySliderOnHover={true}
             callback={state => {
-              if (state.isPlaying !== play) {
-                setPlay(state.isPlaying);
-              }
-
               if (state.error) {
                 console.error("Spotify Player Error:", state.error);
                 setPlayerError(state.error);
                 if (state.errorType === 'authentication_error') {
                   handleLogout();
+                }
+              }
+
+              // Only sync state if the player is active and ready to avoid race conditions during loading
+              if (state.isActive && state.status === 'READY') {
+                if (state.isPlaying !== play) {
+                  setPlay(state.isPlaying);
                 }
               }
             }}
