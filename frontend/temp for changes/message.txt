@@ -1,19 +1,20 @@
+```
 export const emotions = [
-    {
-        name: 'neutral',
+    { 
+        name: 'Neutral', 
         color: '#9CA3AF', // Gray
-        mood: 'neutral',
+        mood: 'neutral', 
         energy: 'balanced',
         playlists: [
             { title: 'Focus Flow', uri: 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ' }, // Domyślna
             { title: 'Ambient', uri: 'spotify:playlist:37i9dQZF1DWWQRwui0ExPn' },
             { title: 'Binaural', uri: 'spotify:playlist:37i9dQZF1DX7EF8wVxbvhG' }
         ]
-    },
-    {
-        name: 'calm',
+    }, 
+    { 
+        name: 'Calm', 
         color: '#34D399', // Green/Teal
-        mood: 'pleasant',
+        mood: 'pleasant', 
         energy: 'low',
         playlists: [
             { title: 'Peaceful Mind', uri: 'spotify:playlist:37i9dQZF1EIgG2NEOhqsD7' },
@@ -21,42 +22,43 @@ export const emotions = [
             { title: 'Nature Sounds', uri: 'spotify:playlist:0TCihNXUDxErwxH6fUrqH2' }
         ]
     },
-    {
-        name: 'happy',
+    { 
+        name: 'Happy', 
         color: '#FDE047', // Yellow
-        mood: 'pleasant',
+        mood: 'pleasant', 
         energy: 'high',
         playlists: [
             { title: 'Good Vibes', uri: 'spotify:playlist:4pnXzlKEJwkjsB6JmhscTi' },
             { title: 'Sunny Day', uri: 'spotify:playlist:0va12zjtBfg7S5KfmDlJuZ' },
             { title: 'Energy Boost', uri: 'spotify:playlist:7gsnIlVe6nFrPRQAdOkrCS' }
         ]
-    },
-    {
-        name: 'sad',
+    }, 
+    { 
+        name: 'Sad', 
         color: '#60A5FA', // Blue
-        mood: 'unpleasant',
+        mood: 'unpleasant', 
         energy: 'low',
         playlists: [
             { title: 'Melancholy', uri: 'spotify:playlist:5DVUEqRL1EV8I9n65eBaAw' },
             { title: 'Rainy Days', uri: 'spotify:playlist:2ZnAWYy4AOs8tpRUCGF6Py' },
             { title: 'Broken Heart', uri: 'spotify:playlist:5sMkYv7UJka4sPnovXWKHH' }
         ]
-    },
-    {
-        name: 'angry',
+    }, 
+    { 
+        name: 'Angry', 
         color: '#F87171', // Red
-        mood: 'unpleasant',
+        mood: 'unpleasant', 
         energy: 'high',
         playlists: [
             { title: 'High Voltage', uri: 'spotify:playlist:37i9dQZF1DWWOaP4H0w5b0' },
             { title: 'Rage Mode', uri: 'spotify:playlist:1GXRoQWlxTNQiMNkOe7RqA' },
             { title: 'Adrenaline', uri: 'spotify:playlist:6IKQrtMc4c00YzONcUt7QH' }
         ]
-    },
+    }, 
 ];
 
 export const getEmotionColor = (emotionName) => {
-    const emotion = emotions.find(e => e.name.toLowerCase() === emotionName.toLowerCase());
+    const emotion = emotions.find(e => e.name === emotionName);
     return emotion ? emotion.color : '#E5E7EB';
 };
+```

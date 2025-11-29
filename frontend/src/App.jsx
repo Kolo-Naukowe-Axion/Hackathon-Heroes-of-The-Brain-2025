@@ -1,52 +1,88 @@
 import React, { useState, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Environment } from '@react-three/drei';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
+import SpotifyPlayer from 'react-spotify-web-playback';
+
 import { emotions } from './utils/emotions';
 import { BrainHero } from './components/BrainHero';
 import { BackgroundParticles } from './components/BackgroundParticles';
-import { PlaylistGrid } from './components/PlaylistGrid';
+import { redirectToAuthCodeFlow, getAccessToken } from './utils/auth';
+
+// --- KONFIGURACJA ---
+const CLIENT_ID = "00ea48b1e2144865828b75c3d4746b7c"; // <--- PAMIĘTAJ O WPISANIU ID!
+const REDIRECT_URI = "http://127.0.0.1:5173/";
+const SCOPES = ["streaming", "user-read-email", "user-read-private", "user-modify-playback-state"];
 
 function App() {
-  const [emotionIndex, setEmotionIndex] = useState(0);
+  const [emotionIndex, setEmotionIndex] = useState(0); // 0 = Neutral
+  const [token, setToken] = useState("");
+  const [play, setPlay] = useState(false);
+  const [activeUri, setActiveUri] = useState("");
 
+  // Logowanie PKCE
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+
+    // Check for existing token
+    const storedToken = window.localStorage.getItem("token");
+    if (storedToken) {
+      setToken(storedToken);
+    }
+
+    if (code && !storedToken) {
+      getAccessToken(CLIENT_ID, code, REDIRECT_URI).then((accessToken) => {
+        if (accessToken) {
+          window.localStorage.setItem("token", accessToken);
+          setToken(accessToken);
+          window.history.replaceState({}, document.title, "/");
+        }
+      });
+    }
+  }, []);
+
+  const handleLogin = () => {
+    redirectToAuthCodeFlow(CLIENT_ID, REDIRECT_URI, SCOPES);
+  };
+
+  // Klawiatura (Symulacja EEG)
+  // N=Neutral, C=Calm, H=Happy, S=Sad, A=Angry
   useEffect(() => {
     const handleKeyDown = (event) => {
       switch (event.key.toLowerCase()) {
-        case 'n':
-          setEmotionIndex(0); // Neutral
-          break;
-        case 'h':
-          setEmotionIndex(1); // Happy
-          break;
-        case 's':
-          setEmotionIndex(2); // Sad
-          break;
-        case 'a':
-          setEmotionIndex(3); // Angry
-          break;
-        default:
-          break;
+        case 'n': setEmotionIndex(0); break; // Neutral
+        case 'c': setEmotionIndex(1); break; // Calm
+        case 'h': setEmotionIndex(2); break; // Happy
+        case 's': setEmotionIndex(3); break; // Sad
+        case 'a': setEmotionIndex(4); break; // Angry
+        default: break;
       }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   const currentEmotion = emotions[emotionIndex];
 
+  // Kiedy zmienia się emocja, automatycznie wybierz PIERWSZĄ playlistę z listy
+  useEffect(() => {
+    if (currentEmotion && currentEmotion.playlists.length > 0) {
+      setActiveUri(currentEmotion.playlists[0].uri);
+      setPlay(true);
+    }
+  }, [emotionIndex]);
+
   return (
     <div className="min-h-screen bg-black text-white font-sans selection:bg-white/30">
-      {/* Hero Section */}
-      <div className="relative h-screen w-full overflow-hidden">
-        {/* 3D Background for Hero */}
+
+      {/* 1. SEKCJA 3D (GÓRA) */}
+      <div className="relative h-[55vh] w-full overflow-hidden">
         <div className="absolute inset-0 z-0">
           <Canvas camera={{ position: [0, 0, 5], fov: 60 }}>
-            <color attach="background" args={['#000000']} />
+            <color attach="background" args={['#050505']} />
             <ambientLight intensity={0.5} />
             <pointLight position={[10, 10, 10]} intensity={1} />
-
             <BrainHero color={currentEmotion.color} />
             <BackgroundParticles color={currentEmotion.color} />
             <OrbitControls enableZoom={false} enablePan={false} />
@@ -54,47 +90,109 @@ function App() {
           </Canvas>
         </div>
 
-        {/* Hero Content Overlay */}
-        <div className="relative z-10 h-full flex flex-col items-center justify-start pt-32 pointer-events-none">
-          <motion.h1
-            key={currentEmotion.name}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            transition={{ duration: 0.8 }}
-            className="text-6xl md:text-9xl font-thin tracking-tighter"
-            style={{
-              color: 'transparent',
-              WebkitTextStroke: `2px ${currentEmotion.color}`,
-              textShadow: `0 0 20px ${currentEmotion.color}, 0 0 40px ${currentEmotion.color}`
-            }}
-          >
-            {currentEmotion.name}
-          </motion.h1>
-          <p
-            className="mt-4 text-xl tracking-widest uppercase"
-            style={{
-              color: currentEmotion.color,
-              textShadow: `0 0 10px ${currentEmotion.color}`
-            }}
-          >
-            Current Vibe
-          </p>
+        {/* TYTUŁ EMOCJI */}
+        <div className="relative z-10 h-full flex flex-col items-center justify-center pointer-events-none">
+          <AnimatePresence mode='wait'>
+            <motion.div
+              key={currentEmotion.name}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="text-center"
+            >
+              <h1
+                className="text-7xl md:text-9xl font-bold tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-white/10"
+                style={{ textShadow: `0 0 50px ${currentEmotion.color}` }}
+              >
+                {currentEmotion.name}
+              </h1>
+              <p className="mt-2 text-xl text-gray-400 tracking-widest uppercase">
+                Energy: <span className="text-white">{currentEmotion.energy}</span> | Mood: <span className="text-white">{currentEmotion.mood}</span>
+              </p>
+            </motion.div>
+          </AnimatePresence>
         </div>
+
+        {/* PRZYCISK LOGOWANIA (JEŚLI NIEZALOGOWANY) */}
+        {!token && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+            <button onClick={handleLogin}
+              className="px-8 py-4 bg-green-500 text-black font-bold rounded-full text-xl hover:scale-105 transition shadow-xl pointer-events-auto">
+              CONNECT SPOTIFY
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Playlists Section */}
-      <div className="relative z-10 w-full min-h-screen bg-black flex flex-col items-center py-20">
-        <div className="text-center mb-16 max-w-2xl px-4">
-          <h2 className="text-3xl md:text-5xl font-light mb-6 text-white tracking-tight">
-            You seem to be in a <span style={{ color: currentEmotion.color }} className="font-normal">{currentEmotion.mood}</span> mood.
+      {/* 2. SEKCJA WYBORU PLAYLISTY (DÓŁ) */}
+      {token && (
+        <div className="relative z-10 w-full min-h-[45vh] bg-gradient-to-b from-black to-gray-900 flex flex-col items-center pt-8 pb-32">
+
+          <h2 className="text-gray-400 text-sm uppercase tracking-widest mb-6">
+            Recommended Soundscapes for {currentEmotion.name}
           </h2>
-          <p className="text-lg md:text-xl text-gray-400 font-light tracking-wide">
-            Your energy seems to be <span className="text-gray-200">{currentEmotion.energy}</span>. Here are some music recommendations:
-          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 px-4 max-w-5xl w-full">
+            {currentEmotion.playlists.map((playlist) => (
+              <button
+                key={playlist.uri}
+                onClick={() => {
+                  setActiveUri(playlist.uri);
+                  setPlay(true);
+                }}
+                className={`
+                  relative overflow-hidden group p-6 rounded-2xl border transition-all duration-300 text-left
+                  ${activeUri === playlist.uri
+                    ? `border-white bg-white/10 scale-105 shadow-[0_0_30px_rgba(255,255,255,0.1)]`
+                    : 'border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/30'}
+                `}
+                style={{ borderColor: activeUri === playlist.uri ? currentEmotion.color : '' }}
+              >
+                <div className="flex flex-col h-full justify-between">
+                  <div>
+                    <h3 className="text-xl font-bold text-white mb-1">{playlist.title}</h3>
+                    <p className="text-xs text-gray-400">Curated for {currentEmotion.energy} energy</p>
+                  </div>
+
+                  <div className={`mt-4 w-8 h-8 rounded-full flex items-center justify-center transition-colors ${activeUri === playlist.uri ? 'bg-green-500 text-black' : 'bg-white/10 text-white'}`}>
+                    {activeUri === playlist.uri ? "▶" : "•"}
+                  </div>
+                </div>
+
+                {/* Glow effect based on emotion color */}
+                <div
+                  className="absolute -right-4 -bottom-4 w-24 h-24 blur-2xl opacity-20 rounded-full transition-colors duration-500"
+                  style={{ backgroundColor: currentEmotion.color }}
+                />
+              </button>
+            ))}
+          </div>
         </div>
-        <PlaylistGrid color={currentEmotion.color} />
-      </div>
+      )}
+
+      {/* 3. ODTWARZACZ (FIXED) */}
+      {token && (
+        <div className="fixed bottom-0 left-0 right-0 z-50 bg-black/90 backdrop-blur-xl border-t border-white/10 p-2">
+          <SpotifyPlayer
+            token={token}
+            uris={[activeUri]}
+            play={play}
+            callback={state => {
+              if (!state.isPlaying) setPlay(false);
+            }}
+            styles={{
+              activeColor: currentEmotion.color,
+              bgColor: 'transparent',
+              color: '#fff',
+              loaderColor: currentEmotion.color,
+              sliderColor: currentEmotion.color,
+              trackArtistColor: '#999',
+              trackNameColor: '#fff',
+              height: '60px',
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
