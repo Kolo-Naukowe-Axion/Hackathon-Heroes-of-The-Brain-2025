@@ -60,6 +60,46 @@ function App() {
     }
   }, []);
 
+  // WebSocket Connection for Emotion Updates
+  useEffect(() => {
+    const ws = new WebSocket("ws://localhost:8000/ws");
+
+    ws.onopen = () => {
+      console.log("Connected to Emotion WebSocket");
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.emotion) {
+          // Map backend emotion labels to frontend emotion indices
+          // Backend labels: "Neutral", "Happy", "Sad", "Angry", "Calm" (from mock/model)
+          // Frontend indices: 0=Neutral, 1=Calm, 2=Happy, 3=Sad, 4=Angry
+          let newIndex = 0;
+          switch (data.emotion.toLowerCase()) {
+            case 'neutral': newIndex = 0; break;
+            case 'calm': newIndex = 1; break;
+            case 'happy': newIndex = 2; break;
+            case 'sad': newIndex = 3; break;
+            case 'angry': newIndex = 4; break;
+            default: break; // Keep current if unknown
+          }
+          setEmotionIndex(newIndex);
+        }
+      } catch (e) {
+        console.error("Error parsing WebSocket message:", e);
+      }
+    };
+
+    ws.onerror = (error) => {
+      console.error("WebSocket error:", error);
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, []);
+
   const handleLogin = () => {
     redirectToAuthCodeFlow(CLIENT_ID, REDIRECT_URI, SCOPES);
   };
