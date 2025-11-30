@@ -67,6 +67,12 @@ function App() {
   const [isMock, setIsMock] = useState(false);
   const [probabilities, setProbabilities] = useState([0, 0, 0, 0]);
   const [debugMode, setDebugMode] = useState(false);
+  // Track selected playlist type index (0=Instrumental, 1=Standard, 2=For Kids)
+  const [selectedPlaylistIndex, setSelectedPlaylistIndex] = useState(() => {
+    // Load from sessionStorage if available, otherwise default to 0 (Instrumental)
+    const saved = sessionStorage.getItem('selectedPlaylistIndex');
+    return saved !== null ? parseInt(saved, 10) : 0;
+  });
   
   // Use ref to track previous probabilities for comparison (avoids closure issue)
   const prevProbsRef = React.useRef([0, 0, 0, 0]);
@@ -266,13 +272,15 @@ function App() {
 
   const currentEmotion = emotions[emotionIndex];
 
-  // Kiedy zmienia się emocja, automatycznie wybierz PIERWSZĄ playlistę z listy
+  // Kiedy zmienia się emocja, automatycznie wybierz playlistę zgodnie z zapamiętanym wyborem użytkownika
   useEffect(() => {
     if (currentEmotion && currentEmotion.playlists.length > 0) {
-      setActiveUri(currentEmotion.playlists[0].uri);
+      // Use the remembered playlist index, but ensure it's valid for this emotion
+      const playlistIndex = Math.min(selectedPlaylistIndex, currentEmotion.playlists.length - 1);
+      setActiveUri(currentEmotion.playlists[playlistIndex].uri);
       setPlay(true);
     }
-  }, [emotionIndex]);
+  }, [emotionIndex, selectedPlaylistIndex]);
 
   // Fetch tracks for current emotion's playlists
   // Fetch tracks for ALL emotions' playlists when token is available
@@ -307,7 +315,7 @@ function App() {
         <div className="absolute top-0 left-0 right-0 z-50 flex justify-between items-center p-6 pointer-events-none">
           {/* LOGO */}
           <div className="pointer-events-auto select-none relative">
-            <img src="/logo_full.png" alt="Oscillate Logo" className="h-40 md:h-56 w-auto opacity-90" />
+            <img src="/logo_full.png" alt="Oscillate Logo" className="h-16 md:h-20 w-auto opacity-90" />
             {debugMode && (
               <div className="absolute -bottom-2 left-0 bg-yellow-500/90 text-black text-xs font-bold px-2 py-1 rounded">
                 DEBUG MODE (Press D to toggle)
@@ -431,10 +439,13 @@ function App() {
               </h2>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 px-4 max-w-5xl w-full">
-                {currentEmotion.playlists.map((playlist) => (
+                {currentEmotion.playlists.map((playlist, index) => (
                   <button
                     key={playlist.uri}
                     onClick={() => {
+                      // Save the selected playlist type index
+                      setSelectedPlaylistIndex(index);
+                      sessionStorage.setItem('selectedPlaylistIndex', index.toString());
                       setActiveUri(playlist.uri);
                       setPlay(true);
                     }}
