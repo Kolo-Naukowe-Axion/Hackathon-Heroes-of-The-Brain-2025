@@ -24,7 +24,7 @@ SCALER_PATH = os.path.join(SCRIPT_DIR, 'model_2.2', 'robust_scaler.pkl')
 # EEG Buffer settings - INCREASED for more stable readings
 BUFFER_LENGTH = 500       # 2 seconds at 250Hz (more context for better frequency resolution)
 TARGET_FS = 250           # Sampling frequency for model_2.2
-CONFIDENCE_THRESHOLD = 0.45  # Slightly lower threshold since we're smoothing
+CONFIDENCE_THRESHOLD = 0.35  # Lower threshold for more sensitive emotion detection
 
 # Prediction smoothing settings
 SMOOTHING_WINDOW = 10     # Average last 10 predictions (~1 second at 10Hz)

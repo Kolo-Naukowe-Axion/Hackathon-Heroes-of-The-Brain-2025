@@ -1,13 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// Model 2.1 classes: ['Calm', 'Relaxed', 'Negative/Angry', 'Positive/Happy']
-const MODEL_CLASSES = ['Calm', 'Relaxed', 'Negative/Angry', 'Positive/Happy'];
+// Model 2.2 classes: ['Calm', 'Relaxed', 'Angry', 'Happy']
+// Display labels: calm, sad, angry, happy (top to bottom)
+const MODEL_CLASSES = ['calm', 'sad', 'angry', 'happy'];
 const CLASS_COLORS = {
-  'Calm': '#3B82F6',           // Blue
-  'Relaxed': '#8B5CF6',        // Purple
-  'Negative/Angry': '#EF4444', // Red
-  'Positive/Happy': '#10B981'  // Green
+  'calm': '#3B82F6',           // Blue
+  'sad': '#8B5CF6',            // Purple
+  'angry': '#EF4444',          // Red
+  'happy': '#10B981'           // Green
 };
 
 export function DebugPanel({ probabilities, isMock }) {
