@@ -15,80 +15,107 @@ def print_flush(*args, **kwargs):
     print(*args, **kwargs)
     sys.stdout.flush()
 
-# --- 1. CONFIGURATION (Matching model_2.3 GRU) ---
+# --- 1. CONFIGURATION (Matching model_v5) ---
 # Get the directory where this script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(SCRIPT_DIR, 'model_2.3', 'gru_model.pth')
-SCALER_PATH = os.path.join(SCRIPT_DIR, 'model_2.3', 'gru_scaler.pkl')
+MODEL_PATH = os.path.join(SCRIPT_DIR, 'model_v5', 'resnet_weights.pth')
+COMPONENTS_PATH = os.path.join(SCRIPT_DIR, 'model_v5', 'ml_components.pkl')
 
-# EEG Buffer settings - GRU model uses 250 samples (1 second window)
-WINDOW_SIZE = 250         # 1 second at 250Hz (GRU model requirement)
-BUFFER_LENGTH = 250      # Match window size for GRU model
-TARGET_FS = 250          # Sampling frequency for model_2.3
+# EEG Buffer settings - model_v5 uses 250 samples (1 second window)
+WINDOW_SIZE = 250         # 1 second at 250Hz (model_v5 requirement)
+BUFFER_LENGTH = 250      # Match window size for model_v5
+TARGET_FS = 250          # Sampling frequency for model_v5
 CONFIDENCE_THRESHOLD = 0.35  # Lower threshold for more sensitive emotion detection
 
 # Prediction smoothing settings
 SMOOTHING_WINDOW = 10     # Average last 10 predictions (~1 second at 10Hz)
 PREDICTION_INTERVAL = 0.1 # Predict every 100ms (10Hz)
 
-# Channel names (matching model_2.3)
+# Channel names (matching model_v5)
 TARGET_CHANNELS = ['AF3', 'AF4', 'O1', 'O2']
 
-# Model classes (model_2.3 output labels)
-MODEL_CLASSES = ['Calm', 'Relaxed', 'Angry', 'Happy']
+# Band definitions (matching model_v5 - includes Delta)
+BANDS = {
+    'Delta': (0.5, 4),
+    'Theta': (4, 8),
+    'Alpha': (8, 13),
+    'Beta': (13, 30),
+    'Gamma': (30, 45)
+}
 
-# Mapping from model_2.3 labels to frontend emotion labels
+# Model classes (model_v5 output labels)
+MODEL_CLASSES = ['Boring', 'Calm', 'Horror', 'Funny']
+
+# Mapping from model_v5 labels to frontend emotion labels
 # Frontend expects: neutral, calm, happy, sad, angry
 MODEL_TO_FRONTEND_MAP = {
-    'Calm': 'calm',
-    'Relaxed': 'calm',           # Relaxed maps to calm
-    'Angry': 'angry',            # Angry maps to angry
-    'Happy': 'happy'             # Happy maps to happy
+    'Boring': 'neutral',  # Boring maps to neutral
+    'Calm': 'calm',       # Calm maps to calm
+    'Horror': 'angry',    # Horror maps to angry
+    'Funny': 'happy'      # Funny maps to happy
 }
 
 
-# --- 2. MODEL ARCHITECTURE (Matching model_2.3 GRU) ---
-class EEG_GRU(nn.Module):
-    """
-    GRU-based neural network architecture for emotion classification (model_2.3).
-    Input: Raw time-series data (4 channels × 250 samples)
-    Output: 4 classes (Calm, Relaxed, Angry, Happy)
-    """
-    def __init__(self, num_classes=4):
-        super(EEG_GRU, self).__init__()
-
-        # 1. Convolutional Block
-        self.conv_block = nn.Sequential(
-            nn.Conv1d(4, 16, kernel_size=5, stride=2, padding=2),
-            nn.BatchNorm1d(16),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.2),
-
-            nn.Conv1d(16, 32, kernel_size=5, stride=2, padding=2),
-            nn.BatchNorm1d(32),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.2)
+# --- 2. MODEL ARCHITECTURE (Matching model_v5) ---
+class ResidualBlock(nn.Module):
+    def __init__(self, dim, dropout):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Linear(dim, dim), nn.BatchNorm1d(dim), nn.GELU(), nn.Dropout(dropout),
+            nn.Linear(dim, dim), nn.BatchNorm1d(dim)
         )
+        self.act = nn.GELU()
+    def forward(self, x): return self.act(x + self.block(x))
 
-        # 2. Recurrent Block
-        self.gru = nn.GRU(input_size=32, hidden_size=64, num_layers=2, batch_first=True, dropout=0.3)
-
-        # 3. Classifier
-        self.fc = nn.Sequential(
-            nn.Linear(64, 32),
-            nn.BatchNorm1d(32),
-            nn.LeakyReLU(0.1),
-            nn.Linear(32, num_classes)
+class WideResNet(nn.Module):
+    """
+    WideResNet architecture for emotion classification (model_v5).
+    Input: Processed features (after log, poly, scale)
+    Output: 4 classes (Boring, Calm, Horror, Funny)
+    """
+    def __init__(self, input_dim, num_classes=4):
+        super().__init__()
+        dim = 1024
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, dim), nn.BatchNorm1d(dim), nn.GELU(), nn.Dropout(0.3),
+            ResidualBlock(dim, 0.4), ResidualBlock(dim, 0.4), ResidualBlock(dim, 0.4),
+            nn.Linear(dim, num_classes)
         )
+    def forward(self, x): return self.net(x)
 
-    def forward(self, x):
-        # x: (Batch, 4, 250)
-        x = self.conv_block(x)
-        x = x.permute(0, 2, 1)  # Swap for GRU: (Batch, Time, Feats)
-        out, _ = self.gru(x)
-        out = out[:, -1, :]     # Last time step
-        out = self.fc(out)
-        return out
+
+# --- 3. FEATURE EXTRACTION (Matching model_v5) ---
+def compute_band_powers(raw_buffer, fs):
+    """
+    Computes relative band powers for model_v5.
+    Converts Raw EEG (250, 4) -> 20 Features (4 channels * 5 bands)
+    
+    Args:
+        raw_buffer: numpy array of shape (n_samples, n_channels), e.g., (250, 4)
+                   Expected order: [AF3, AF4, O1, O2]
+        fs: sampling frequency (250 Hz)
+    
+    Returns:
+        numpy array of shape (1, 20) - relative band powers
+    """
+    eps = 1e-10
+    # Welch's Periodogram
+    freqs, psd = scipy.signal.welch(raw_buffer, fs, nperseg=len(raw_buffer), axis=0)
+    total_power = np.sum(psd, axis=0)
+
+    features = []
+    # Loop order MUST match training: Channel 1 (D,T,A,B,G), Channel 2...
+    for ch_idx in range(raw_buffer.shape[1]):
+        for band, (low, high) in BANDS.items():
+            idx = np.logical_and(freqs >= low, freqs <= high)
+            if total_power[ch_idx] == 0:
+                val = 0
+            else:
+                # Relative Band Power
+                val = np.sum(psd[idx, ch_idx]) / (total_power[ch_idx] + eps)
+            features.append(val)
+
+    return np.array(features).reshape(1, -1)
 
 
 # --- 4. EMOTION DETECTOR CLASS ---
@@ -114,35 +141,37 @@ class EmotionDetector:
         self.prediction_rate = 0.0
         self._get_data_call_count = 0
         
-        # Load model_2.3 GRU components
+        # Load model_v5 components
         try:
             print("=" * 60)
-            print("LOADING MODEL 2.3 GRU COMPONENTS")
+            print("LOADING MODEL V5 COMPONENTS")
             print("=" * 60)
             
             # Check if files exist
             if not os.path.exists(MODEL_PATH):
                 raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
-            if not os.path.exists(SCALER_PATH):
-                raise FileNotFoundError(f"Scaler file not found: {SCALER_PATH}")
+            if not os.path.exists(COMPONENTS_PATH):
+                raise FileNotFoundError(f"Components file not found: {COMPONENTS_PATH}")
             
-            print(f"Loading scaler from: {SCALER_PATH}")
-            self.scaler = joblib.load(SCALER_PATH)
-            print(f"  ✓ Scaler loaded successfully")
+            print(f"Loading ML components from: {COMPONENTS_PATH}")
+            components_data = joblib.load(COMPONENTS_PATH)
+            self.scaler = components_data['scaler']
+            self.poly = components_data['poly']
+            self.gb_model = components_data['gb_model']
+            self.input_dim = components_data['input_dim']
+            print(f"  ✓ Components loaded successfully")
             print(f"  - Scaler type: {type(self.scaler).__name__}")
-            
-            # Initialize bandpass filter (0.5 - 45 Hz) for GRU model
-            print(f"  Initializing bandpass filter (0.5-45 Hz)...")
-            self.filter_b, self.filter_a = scipy.signal.butter(4, [0.5, 45], btype='band', fs=TARGET_FS)
-            print(f"  ✓ Filter initialized")
+            print(f"  - Polynomial features: {type(self.poly).__name__}")
+            print(f"  - Gradient Boosting model: {type(self.gb_model).__name__}")
+            print(f"  - Input dimension: {self.input_dim}")
             
             # Device selection
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             print(f"Using device: {self.device}")
             
-            # Initialize GRU model architecture
-            print(f"Loading EEG_GRU model from: {MODEL_PATH}")
-            self.model = EEG_GRU(num_classes=4)
+            # Initialize WideResNet model architecture
+            print(f"Loading WideResNet model from: {MODEL_PATH}")
+            self.resnet = WideResNet(self.input_dim, num_classes=4)
             
             # Load weights
             print(f"  Loading state dict...")
@@ -151,52 +180,40 @@ class EmotionDetector:
             
             # Verify model architecture matches
             try:
-                self.model.load_state_dict(state_dict)
+                self.resnet.load_state_dict(state_dict)
                 print(f"  ✓ State dict loaded successfully")
             except RuntimeError as e:
                 print(f"  ❌ ERROR: Model architecture mismatch!")
                 print(f"  Error: {e}")
                 print(f"  This means the saved model doesn't match the current architecture.")
                 print(f"  Expected model structure:")
-                for name, param in self.model.named_parameters():
+                for name, param in self.resnet.named_parameters():
                     print(f"    {name}: {param.shape}")
                 raise
             
-            self.model = self.model.to(self.device)
-            self.model.eval()  # Set to evaluation mode (disables dropout)
-            
-            # Test model with dummy input to verify it works
-            print(f"  Testing model with dummy input...")
-            dummy_input = torch.randn(1, 4, WINDOW_SIZE).to(self.device)  # (Batch, Channels, Time)
-            with torch.no_grad():
-                dummy_output = self.model(dummy_input)
-                dummy_probs = torch.nn.functional.softmax(dummy_output, dim=1)
-            print(f"  ✓ Model test successful")
-            print(f"  Dummy output: {dummy_output[0].cpu().numpy()}")
-            print(f"  Dummy probs: {dummy_probs[0].cpu().numpy()}")
-            
-            if np.allclose(dummy_probs[0].cpu().numpy(), [0.25, 0.25, 0.25, 0.25], atol=0.01):
-                print(f"  ⚠️ WARNING: Model outputs uniform probabilities on random input!")
-                print(f"  This suggests the model weights might not be trained properly.")
+            self.resnet = self.resnet.to(self.device)
+            self.resnet.eval()  # Set to evaluation mode (disables dropout)
             
             print(f"  ✓ Model loaded successfully")
-            print(f"  - Input shape: (Batch, 4 channels, {WINDOW_SIZE} samples)")
+            print(f"  - Input dimension: {self.input_dim} (after log + poly + scale)")
             print(f"  - Output classes: {MODEL_CLASSES}")
             print("=" * 60)
             
         except Exception as e:
             print(f"\n{'='*60}")
-            print(f"❌ CRITICAL ERROR LOADING MODEL 2.3")
+            print(f"❌ CRITICAL ERROR LOADING MODEL V5")
             print(f"{'='*60}")
             print(f"Error: {e}")
             print(f"\nFull traceback:")
             import traceback
             traceback.print_exc()
             print(f"\n{'='*60}")
-            print(f"MODEL AND SCALER SET TO None - PREDICTIONS WILL FAIL")
+            print(f"MODEL AND COMPONENTS SET TO None - PREDICTIONS WILL FAIL")
             print(f"{'='*60}\n")
-            self.model = None
+            self.resnet = None
             self.scaler = None
+            self.poly = None
+            self.gb_model = None
             self.device = torch.device('cpu')
             
             # Don't silently continue - raise the error so it's clear
@@ -209,7 +226,7 @@ class EmotionDetector:
             return
         self.running = True
         print("=" * 80)
-        print("STARTING EMOTION DETECTOR - MODEL 2.3 GRU")
+        print("STARTING EMOTION DETECTOR - MODEL V5")
         print("=" * 80)
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.thread.start()
@@ -490,8 +507,8 @@ class EmotionDetector:
                                 self.prediction_rate = len(prediction_times) / time_span
                     
                     # Check if model is loaded
-                    if self.model is None:
-                        print("❌ CRITICAL ERROR: Model is None! Model failed to load during initialization.")
+                    if self.resnet is None:
+                        print("❌ CRITICAL ERROR: ResNet model is None! Model failed to load during initialization.")
                         print("   Check the startup logs for model loading errors.")
                         print("   The detector cannot make predictions without a model.")
                         time.sleep(5)
@@ -502,13 +519,28 @@ class EmotionDetector:
                         print("   The detector cannot make predictions without a scaler.")
                         time.sleep(5)
                         continue
+                    if self.poly is None:
+                        print("❌ CRITICAL ERROR: Polynomial transformer is None! Failed to load during initialization.")
+                        print("   Check the startup logs for component loading errors.")
+                        time.sleep(5)
+                        continue
+                    if self.gb_model is None:
+                        print("❌ CRITICAL ERROR: Gradient Boosting model is None! Failed to load during initialization.")
+                        print("   Check the startup logs for component loading errors.")
+                        time.sleep(5)
+                        continue
+                        print("❌ CRITICAL ERROR: Scaler is None! Scaler failed to load during initialization.")
+                        print("   Check the startup logs for scaler loading errors.")
+                        print("   The detector cannot make predictions without a scaler.")
+                        time.sleep(5)
+                        continue
                     
                     # Convert buffer to numpy array
                     raw_data = np.array(list(raw_buffer))
                     
-                    # Ensure we have exactly WINDOW_SIZE samples for GRU model
+                    # Ensure we have exactly WINDOW_SIZE samples for model_v5
                     if len(raw_data) < WINDOW_SIZE:
-                        print(f"Warning: Only {len(raw_data)} samples, need {WINDOW_SIZE} for GRU model.")
+                        print(f"Warning: Only {len(raw_data)} samples, need {WINDOW_SIZE} for model_v5.")
                         continue
                     
                     # Take the last WINDOW_SIZE samples
@@ -528,58 +560,50 @@ class EmotionDetector:
                     print(f"# Data range: [{window_data.min():.4f}, {window_data.max():.4f}]")
                     print(f"{'#'*60}")
                     
-                    # ===== MODEL 2.3 GRU PIPELINE =====
+                    # ===== MODEL V5 PIPELINE =====
                     
-                    # Step 1: Transpose to (4, 250) - channels first for GRU model
-                    data = window_data.T  # Shape: (4, 250)
+                    # Step 1: Compute relative band powers (20 features: 4 channels × 5 bands)
+                    X_raw = compute_band_powers(window_data, TARGET_FS)
                     
-                    # CRITICAL DEBUG: Check raw data validity
-                    print(f"\n[PRED #{prediction_count}] GRU PREPROCESSING:")
+                    # CRITICAL DEBUG: Check feature validity
+                    print(f"\n[PRED #{prediction_count}] MODEL V5 PREPROCESSING:")
                     print(f"  Window data stats: shape={window_data.shape}, range=[{window_data.min():.4f}, {window_data.max():.4f}]")
-                    print(f"  Transposed data shape: {data.shape}")
-                    if np.any(np.isnan(data)) or np.any(np.isinf(data)):
-                        print(f"  ❌ ERROR: Invalid data detected (NaN or Inf)!")
+                    print(f"  Band powers shape: {X_raw.shape}, count: {len(X_raw[0])}")
+                    print(f"  Band powers range: [{X_raw.min():.4f}, {X_raw.max():.4f}]")
+                    if np.any(np.isnan(X_raw)) or np.any(np.isinf(X_raw)):
+                        print(f"  ❌ ERROR: Invalid band powers detected (NaN or Inf)!")
                         continue
                     
-                    # Step 2: Apply bandpass filter (0.5 - 45 Hz)
+                    # Step 2: Preprocessing (Log -> Poly -> Scale)
                     try:
-                        data_filtered = scipy.signal.filtfilt(self.filter_b, self.filter_a, data, axis=1)
-                        print(f"  Filtered data range: [{data_filtered.min():.4f}, {data_filtered.max():.4f}]")
+                        X_log = np.log1p(X_raw)
+                        X_poly = self.poly.transform(X_log)
+                        X_proc = self.scaler.transform(X_poly)
+                        print(f"  Processed features shape: {X_proc.shape}, range: [{X_proc.min():.4f}, {X_proc.max():.4f}]")
                     except Exception as e:
-                        print(f"  ❌ ERROR in filtering: {e}")
+                        print(f"  ❌ ERROR in preprocessing: {e}")
                         continue
                     
-                    # Step 3: Scale the flattened data
-                    flat_data = data_filtered.reshape(1, -1)  # Flatten to (1, 1000) for scaler
-                    try:
-                        scaled_data = self.scaler.transform(flat_data)
-                        print(f"  Scaled data range: [{scaled_data.min():.4f}, {scaled_data.max():.4f}]")
-                    except Exception as e:
-                        print(f"  ❌ ERROR in scaler.transform: {e}")
-                        continue
-                    
-                    # Step 4: Reshape for GRU model: (1, 4, 250)
-                    input_tensor_data = scaled_data.reshape(1, 4, WINDOW_SIZE)
-                    
-                    # Step 5: Convert to tensor and run inference
+                    # Step 3: ResNet Prediction
                     with torch.no_grad():
-                        input_tensor = torch.tensor(input_tensor_data, dtype=torch.float32).to(self.device)
-                        print(f"  Input tensor shape: {input_tensor.shape}, range: [{input_tensor.min():.4f}, {input_tensor.max():.4f}]")
+                        tensor_in = torch.tensor(X_proc, dtype=torch.float32).to(self.device)
+                        print(f"  Input tensor shape: {tensor_in.shape}, range: [{tensor_in.min():.4f}, {tensor_in.max():.4f}]")
                         
-                        outputs = self.model(input_tensor)
-                        raw_outputs = outputs[0].cpu().numpy()
-                        print(f"  Model raw outputs (before softmax): {raw_outputs}")
-                        print(f"  Raw outputs range: [{raw_outputs.min():.4f}, {raw_outputs.max():.4f}]")
-                        
-                        if np.all(raw_outputs == 0) or np.all(np.abs(raw_outputs) < 1e-6):
-                            print(f"  ❌ ERROR: Model outputs are all zeros or near-zero!")
-                            print(f"  This means the model is not producing valid predictions!")
-                            continue
-                        
-                        probs = torch.nn.functional.softmax(outputs, dim=1)
+                        resnet_output = self.resnet(tensor_in)
+                        p_res = torch.nn.functional.softmax(resnet_output, dim=1).cpu().numpy()[0]
+                        print(f"  ResNet probabilities: {p_res}")
                     
-                    # Get raw probabilities from model
-                    raw_probs = probs[0].cpu().numpy()
+                    # Step 4: Gradient Boosting Prediction
+                    try:
+                        p_gb = self.gb_model.predict_proba(X_proc)[0]
+                        print(f"  GB probabilities: {p_gb}")
+                    except Exception as e:
+                        print(f"  ❌ ERROR in GB prediction: {e}")
+                        continue
+                    
+                    # Step 5: Ensemble (0.6 * ResNet + 0.4 * GB)
+                    raw_probs = 0.6 * p_res + 0.4 * p_gb
+                    print(f"  Ensemble probabilities: {raw_probs}")
                     
                     # CRITICAL DEBUG: Check model outputs
                     print(f"  Model probabilities (after softmax): {raw_probs}")
