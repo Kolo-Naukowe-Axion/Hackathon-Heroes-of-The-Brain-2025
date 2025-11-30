@@ -309,7 +309,7 @@ function App() {
     <div className="min-h-screen bg-black text-white font-sans selection:bg-white/30">
 
       {/* 1. SEKCJA 3D (GÓRA) */}
-      <div className="relative h-[70vh] w-full overflow-hidden">
+      <div className="relative h-[110vh] w-full overflow-hidden">
 
         {/* HEADER (LOGO + DISCONNECT) */}
         <div className="absolute top-0 left-0 right-0 z-50 flex justify-between items-center p-6 pointer-events-none">
@@ -369,14 +369,14 @@ function App() {
         </div>
 
         {/* TYTUŁ EMOCJI */}
-        <div className="relative z-10 h-full flex flex-col items-center justify-start pt-12 pointer-events-none">
+        <div className="relative z-10 h-full flex flex-col items-center justify-start pt-20 pointer-events-none">
           <AnimatePresence mode='wait'>
             <motion.div
               key={currentEmotion.name}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="text-center"
+              className="text-center mb-8"
             >
               <h1
                 className="text-7xl md:text-9xl font-bold tracking-tighter text-transparent bg-clip-text pb-4"
@@ -412,7 +412,7 @@ function App() {
       {/* 2. SEKCJA WYBORU PLAYLISTY (DÓŁ) */}
       {
         token && (
-          <div className="relative z-10 w-full min-h-[60vh] bg-black flex flex-col items-center pt-8 pb-32">
+          <div className="relative z-10 w-full min-h-[60vh] bg-black flex flex-col items-center pt-20 pb-32">
 
             {/* TŁO Z GWIAZDAMI (DÓŁ) */}
             <div className="absolute inset-0 z-0">
