@@ -1,25 +1,54 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// Model classes: ['Boring', 'Calm', 'Horror', 'Funny']
-const MODEL_CLASSES = ['Boring', 'Calm', 'Horror', 'Funny'];
+// Model 2.1 classes: ['Calm', 'Relaxed', 'Negative/Angry', 'Positive/Happy']
+const MODEL_CLASSES = ['Calm', 'Relaxed', 'Negative/Angry', 'Positive/Happy'];
 const CLASS_COLORS = {
-  'Boring': '#9CA3AF',   // Gray
-  'Calm': '#3B82F6',     // Blue
-  'Horror': '#EF4444',   // Red
-  'Funny': '#F59E0B'     // Amber
+  'Calm': '#3B82F6',           // Blue
+  'Relaxed': '#8B5CF6',        // Purple
+  'Negative/Angry': '#EF4444', // Red
+  'Positive/Happy': '#10B981'  // Green
 };
 
 export function DebugPanel({ probabilities, isMock }) {
   const canvasRef = useRef(null);
+  const lastProbsRef = useRef(null);
   const [history, setHistory] = useState([]);
-  const maxHistoryLength = 200; // Keep last 200 points (20 seconds at 10Hz)
+  const [lastUpdateTime, setLastUpdateTime] = useState(0);
+  const [updateCount, setUpdateCount] = useState(0);
+  const maxHistoryLength = 300; // Keep last 300 points (30 seconds at 10Hz) - increased for better context
 
   // Add current probabilities to history
   useEffect(() => {
     if (probabilities && probabilities.length === 4) {
+      const now = Date.now();
+      const probsStr = probabilities.map(p => p.toFixed(3)).join(', ');
+      
+      // Log when probabilities actually change
+      if (lastProbsRef.current) {
+        const lastProbsStr = lastProbsRef.current.map(p => p.toFixed(3)).join(', ');
+        if (probsStr !== lastProbsStr) {
+          console.log('[DEBUG PANEL] Probabilities changed!', {
+            old: lastProbsStr,
+            new: probsStr,
+            oldArray: [...lastProbsRef.current],
+            newArray: [...probabilities]
+          });
+        }
+      } else {
+        console.log('[DEBUG PANEL] First probabilities received:', {
+          probs: probsStr,
+          array: [...probabilities]
+        });
+      }
+      
+      // Update ref
+      lastProbsRef.current = [...probabilities];
+      
+      setLastUpdateTime(now);
+      setUpdateCount(prev => prev + 1);
       setHistory(prev => {
-        const newHistory = [...prev, { time: Date.now(), probs: [...probabilities] }];
+        const newHistory = [...prev, { time: now, probs: [...probabilities] }];
         return newHistory.slice(-maxHistoryLength);
       });
     }
@@ -175,8 +204,14 @@ export function DebugPanel({ probabilities, isMock }) {
         {/* Stats */}
         <div className="mt-4 pt-4 border-t border-white/10">
           <div className="flex justify-between text-xs text-gray-400">
-            <span>History Points: {history.length}</span>
-            <span>Update Rate: 10 Hz</span>
+            <span>History: {history.length} pts</span>
+            <span>Updates: {updateCount}</span>
+          </div>
+          <div className="flex justify-between text-xs text-gray-400 mt-1">
+            <span>Last update: {lastUpdateTime > 0 ? `${((Date.now() - lastUpdateTime) / 1000).toFixed(1)}s ago` : 'Never'}</span>
+            <span className={updateCount > 0 ? 'text-green-400' : 'text-red-400'}>
+              {updateCount > 0 ? '● LIVE' : '○ NO DATA'}
+            </span>
           </div>
         </div>
       </motion.div>

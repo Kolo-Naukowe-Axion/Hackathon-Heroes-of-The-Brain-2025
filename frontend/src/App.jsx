@@ -67,6 +67,10 @@ function App() {
   const [isMock, setIsMock] = useState(false);
   const [probabilities, setProbabilities] = useState([0, 0, 0, 0]);
   const [debugMode, setDebugMode] = useState(false);
+  
+  // Use ref to track previous probabilities for comparison (avoids closure issue)
+  const prevProbsRef = React.useRef([0, 0, 0, 0]);
+  const hasLoggedFirstUpdateRef = React.useRef(false);
 
   // WebSocket Connection for Emotion Updates with reconnection logic
   useEffect(() => {
@@ -83,21 +87,67 @@ function App() {
         ws.onopen = () => {
           console.log("Connected to Emotion WebSocket");
           reconnectAttempts = 0; // Reset on successful connection
+          hasLoggedFirstUpdateRef.current = false; // Reset flag on reconnect
         };
 
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            if (data.is_mock !== undefined) {
-              setIsMock(data.is_mock);
-              console.log(`BCI Mode: ${data.is_mock ? "Simulation" : "Connected"}`);
+            
+            // FORCE is_mock to false - no mock data exists anymore
+            setIsMock(false);
+            
+            // ALWAYS update probabilities - this is critical for debug panel
+            if (data.probabilities && Array.isArray(data.probabilities) && data.probabilities.length === 4) {
+              // Force update by creating new array reference
+              const newProbs = data.probabilities.map(p => typeof p === 'number' ? p : parseFloat(p));
+              
+              // Verify the values are actually numbers
+              if (newProbs.some(p => isNaN(p) || !isFinite(p))) {
+                console.error('[WS] Invalid probability values detected:', newProbs);
+                console.error('[WS] Raw data.probabilities:', data.probabilities);
+              } else {
+                // Compare with previous values using ref (not state closure)
+                const prevProbs = prevProbsRef.current;
+                const probsStr = newProbs.map(p => p.toFixed(3)).join(', ');
+                const prevStr = prevProbs.map(p => p.toFixed(3)).join(', ');
+                const valuesChanged = probsStr !== prevStr;
+                
+                // Log first update only once
+                if (!hasLoggedFirstUpdateRef.current) {
+                  console.log('[WS] First probabilities received:', {
+                    emotion: data.emotion,
+                    probs: probsStr,
+                    array: [...newProbs]
+                  });
+                  hasLoggedFirstUpdateRef.current = true;
+                } else if (valuesChanged) {
+                  console.log('[WS] VALUES CHANGED!', {
+                    emotion: data.emotion,
+                    oldProbs: prevStr,
+                    newProbs: probsStr,
+                    oldArray: [...prevProbs],
+                    newArray: [...newProbs]
+                  });
+                }
+                
+                // Always update ref with new values (for next comparison)
+                prevProbsRef.current = [...newProbs];
+                // Always update state (for debug panel)
+                setProbabilities(newProbs);
+              }
+            } else {
+              console.warn('[WS] Invalid probabilities format:', {
+                probabilities: data.probabilities,
+                isArray: Array.isArray(data.probabilities),
+                length: data.probabilities?.length
+              });
             }
-            if (data.probabilities && Array.isArray(data.probabilities)) {
-              setProbabilities(data.probabilities);
-            }
+            
+            // Update emotion
             if (data.emotion) {
               // Map backend emotion labels to frontend emotion indices
-              // Backend labels: "Neutral", "Happy", "Sad", "Angry", "Calm" (from mock/model)
+              // Model 2.1 labels: calm, happy, angry, neutral
               // Frontend indices: 0=Neutral, 1=Calm, 2=Happy, 3=Sad, 4=Angry
               let newIndex = 0;
               switch (data.emotion.toLowerCase()) {
@@ -106,7 +156,7 @@ function App() {
                 case 'happy': newIndex = 2; break;
                 case 'sad': newIndex = 3; break;
                 case 'angry': newIndex = 4; break;
-                default: break; // Keep current if unknown
+                default: break;
               }
               setPendingEmotionIndex(newIndex);
             }

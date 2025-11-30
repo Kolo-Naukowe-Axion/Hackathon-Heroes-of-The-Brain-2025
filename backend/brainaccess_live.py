@@ -5,161 +5,258 @@ import torch
 import joblib
 import threading
 from pylsl import StreamInlet, resolve_byprop, resolve_streams
-from scipy.signal import welch
+import scipy.signal
 from collections import deque
 import torch.nn as nn
+import os
 
 # Force immediate output flushing for all print statements
 def print_flush(*args, **kwargs):
     print(*args, **kwargs)
     sys.stdout.flush()
 
-# --- 1. KONFIGURACJA ---
-MODEL_PATH = 'model_v5/resnet_weights.pth'
-COMPONENTS_PATH = 'model_v5/ml_components.pkl'
-BUFFER_LENGTH = 250  # ok. 1 sekunda przy 250Hz
-FS = 250             # Częstotliwość próbkowania BrainAccess
-CONFIDENCE_THRESHOLD = 0.65 # Próg pewności dla emocji (dopasowany do model_v5)
+# --- 1. CONFIGURATION (Matching model_2.2) ---
+# Get the directory where this script is located
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(SCRIPT_DIR, 'model_2.2', 'enhanced_model.pth')
+SCALER_PATH = os.path.join(SCRIPT_DIR, 'model_2.2', 'robust_scaler.pkl')
 
-# Definicja pasm
+# EEG Buffer settings - INCREASED for more stable readings
+BUFFER_LENGTH = 500       # 2 seconds at 250Hz (more context for better frequency resolution)
+TARGET_FS = 250           # Sampling frequency for model_2.2
+CONFIDENCE_THRESHOLD = 0.45  # Slightly lower threshold since we're smoothing
+
+# Prediction smoothing settings
+SMOOTHING_WINDOW = 10     # Average last 10 predictions (~1 second at 10Hz)
+PREDICTION_INTERVAL = 0.1 # Predict every 100ms (10Hz)
+
+# Channel names (matching model_2.2)
+TARGET_CHANNELS = ['AF3', 'AF4', 'O1', 'O2']
+
+# Band definitions (matching model_2.2 - no Delta band)
 BANDS = {
-    'delta': (0.5, 4),
-    'theta': (4, 8),
-    'alpha': (8, 13),
-    'beta': (13, 30),
-    'gamma': (30, 45)
+    'Theta': (4, 8),
+    'Alpha': (8, 13),
+    'Beta': (13, 30),
+    'Gamma': (30, 45)
 }
 
-# Mapowanie klas modelu do emocji frontendu
-# Model outputs: ['Boring', 'Calm', 'Horror', 'Funny']
+# Model classes (model_2.2 output labels)
+MODEL_CLASSES = ['Calm', 'Relaxed', 'Angry', 'Happy']
+
+# Mapping from model_2.2 labels to frontend emotion labels
 # Frontend expects: neutral, calm, happy, sad, angry
-MODEL_CLASSES = ['Boring', 'Calm', 'Horror', 'Funny']
 MODEL_TO_FRONTEND_MAP = {
-    'Boring': 'neutral',  # Boring -> neutral
-    'Calm': 'calm',       # Calm -> calm
-    'Horror': 'angry',    # Horror -> angry
-    'Funny': 'happy'      # Funny -> happy
+    'Calm': 'calm',
+    'Relaxed': 'calm',           # Relaxed maps to calm
+    'Angry': 'angry',            # Angry maps to angry
+    'Happy': 'happy'             # Happy maps to happy
 }
 
-# --- 2. DEFINICJA MODELU (WideResNet zgodny z model_v5) ---
-class ResidualBlock(nn.Module):
-    def __init__(self, dim, dropout):
-        super().__init__()
-        self.block = nn.Sequential(
-            nn.Linear(dim, dim), nn.BatchNorm1d(dim), nn.GELU(), nn.Dropout(dropout),
-            nn.Linear(dim, dim), nn.BatchNorm1d(dim)
-        )
-        self.act = nn.GELU()
-    def forward(self, x): 
-        return self.act(x + self.block(x))
 
-class WideResNet(nn.Module):
-    def __init__(self, input_dim, num_classes=4):
-        super().__init__()
-        dim = 1024
+# --- 2. MODEL ARCHITECTURE (Matching model_2.2) ---
+class EmotionNet(nn.Module):
+    """
+    Neural network architecture for emotion classification (model_2.2).
+    Input: 24 features (16 log powers + 8 asymmetry features)
+    Output: 4 classes (Calm, Relaxed, Angry, Happy)
+    """
+    def __init__(self, input_size=24, num_classes=4):
+        super(EmotionNet, self).__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_dim, dim), nn.BatchNorm1d(dim), nn.GELU(), nn.Dropout(0.3),
-            ResidualBlock(dim, 0.4), ResidualBlock(dim, 0.4), ResidualBlock(dim, 0.4),
-            nn.Linear(dim, num_classes)
+            nn.Linear(input_size, 64),
+            nn.BatchNorm1d(64),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.5),
+            nn.Linear(64, 32),
+            nn.BatchNorm1d(32),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.3),
+            nn.Linear(32, num_classes)
         )
-    def forward(self, x): 
+    
+    def forward(self, x):
         return self.net(x)
 
-# --- 3. PRZETWARZANIE SYGNAŁU ---
-def extract_band_powers(data_buffer, fs):
-    """
-    Extract raw band powers from EEG data.
-    Returns raw power values (not log-transformed) as model_v5 expects log1p to be applied later.
-    """
-    data = np.array(data_buffer)
-    n_samples, n_channels = data.shape
-    features = []
-    
-    for ch in range(n_channels):
-        sig = data[:, ch]
-        freqs, psd = welch(sig, fs, nperseg=n_samples)
-        
-        for band_name, (low, high) in BANDS.items():
-            idx = np.logical_and(freqs >= low, freqs <= high)
-            band_power = np.sum(psd[idx])
-            if band_power <= 0: band_power = 1e-10
-            # Return raw band power (model_v5 applies log1p in preprocessing)
-            features.append(band_power)
-            
-    return np.array(features).reshape(1, -1)
 
-# --- 4. KLASA DETEKTORA ---
+# --- 3. FEATURE EXTRACTION (Matching model_2.2 - log powers + asymmetry) ---
+def get_band_power(data, fs):
+    """
+    Calculates log band powers and asymmetry features for a chunk of EEG data.
+    This matches the model_2.2 feature extraction method.
+    
+    Args:
+        data: numpy array of shape (n_samples, n_channels), e.g., (250, 4)
+              Expected order: [AF3, AF4, O1, O2]
+        fs: sampling frequency (250 Hz)
+    
+    Returns:
+        numpy array of shape (24,) - 16 log powers (4 channels × 4 bands) + 8 asymmetry features
+    """
+    eps = 1e-10
+    
+    # Compute PSD using Welch's method
+    freqs, psd = scipy.signal.welch(data, fs, nperseg=len(data), axis=0)
+    
+    # Calculate log powers for each channel and band
+    powers = {ch: [] for ch in TARGET_CHANNELS}
+    
+    # 1. Log Powers (4 channels × 4 bands = 16 features)
+    for ch_idx, ch_name in enumerate(TARGET_CHANNELS):
+        for band, (low, high) in BANDS.items():
+            idx = np.logical_and(freqs >= low, freqs <= high)
+            val = np.sum(psd[idx, ch_idx])
+            powers[ch_name].append(np.log(val + eps))
+    
+    feature_vector = []
+    
+    # Raw log power features (16 features)
+    for ch in TARGET_CHANNELS:
+        feature_vector.extend(powers[ch])
+    
+    # Asymmetry features (8 features)
+    # AF3 - AF4 for each band (4 features)
+    for i in range(len(BANDS)):
+        feature_vector.append(powers['AF3'][i] - powers['AF4'][i])
+    # O1 - O2 for each band (4 features)
+    for i in range(len(BANDS)):
+        feature_vector.append(powers['O1'][i] - powers['O2'][i])
+    
+    return np.array(feature_vector, dtype=np.float32)
+
+
+# --- 4. EMOTION DETECTOR CLASS ---
 class EmotionDetector:
     def __init__(self):
         self.running = False
         self.thread = None
         self.lock = threading.Lock()
         
-        # Stan
+        # State
         self.current_emotion = "WAITING..."
-        self.current_probs = [0.0, 0.0, 0.0, 0.0] 
-        self.history = deque(maxlen=30) 
-        self.is_mock = False # Flag to indicate if running in simulation mode
+        self.current_probs = [0.0, 0.0, 0.0, 0.0]  # 4 classes
+        self.history = deque(maxlen=30)
         
-        # CRITICAL: Add timestamp to track data freshness
+        # Prediction smoothing buffer - stores last N raw predictions for averaging
+        self.prediction_buffer = deque(maxlen=SMOOTHING_WINDOW)
+        
+        # Data freshness tracking
         self.last_state_update_time = 0
         self.last_prediction_time = 0
         self.last_data_received_time = 0
-        self.buffer_fill_rate = 0.0  # Samples per second
-        self.prediction_rate = 0.0  # Predictions per second
+        self.buffer_fill_rate = 0.0
+        self.prediction_rate = 0.0
+        self._get_data_call_count = 0
         
-        # Ładowanie AI
+        # Load model_2.2 components
         try:
-            print("Ładowanie komponentów ML...")
-            components = joblib.load(COMPONENTS_PATH)
-            self.scaler = components['scaler']
-            self.poly = components['poly']
-            self.gb_model = components.get('gb_model', None)  # Ensemble model (opcjonalny)
+            print("=" * 60)
+            print("LOADING MODEL 2.2 COMPONENTS")
+            print("=" * 60)
             
-            # Sprawdzenie czy gb_model istnieje (wymagany dla model_v5)
-            if self.gb_model is None:
-                print("OSTRZEŻENIE: gb_model nie znaleziony w komponentach! Ensemble nie będzie działał.")
+            # Check if files exist
+            if not os.path.exists(MODEL_PATH):
+                raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
+            if not os.path.exists(SCALER_PATH):
+                raise FileNotFoundError(f"Scaler file not found: {SCALER_PATH}")
             
-            # Wymiary
-            # Scaler oczekuje wejścia po transformacji wielomianowej (230 cech)
-            self.input_dim = self.scaler.mean_.shape[0] 
-            self.num_classes = 4
-            
-            # Wybór urządzenia (CPU/GPU) - zgodnie z model_v5
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            print(f"Używane urządzenie: {self.device}")
-            
-            print(f"Inicjalizacja modelu WideResNet (Input: {self.input_dim}, Classes: {self.num_classes})...")
-            self.model = WideResNet(input_dim=self.input_dim, num_classes=self.num_classes)
-            
-            # Ładowanie wag i przeniesienie na odpowiednie urządzenie
-            self.model.load_state_dict(torch.load(MODEL_PATH, map_location=self.device))
-            self.model = self.model.to(self.device)
-            self.model.eval()
-            
-            if self.gb_model is not None:
-                print("Model załadowany pomyślnie (z ensemble).")
+            print(f"Loading scaler from: {SCALER_PATH}")
+            self.scaler = joblib.load(SCALER_PATH)
+            print(f"  ✓ Scaler loaded successfully")
+            # RobustScaler uses center_ instead of mean_
+            if hasattr(self.scaler, 'center_'):
+                num_features = self.scaler.center_.shape[0]
+            elif hasattr(self.scaler, 'mean_'):
+                num_features = self.scaler.mean_.shape[0]
             else:
-                print("Model załadowany pomyślnie (bez ensemble).")
+                # Try to infer from a test transform
+                test_input = np.array([[1.0] * 24])
+                try:
+                    _ = self.scaler.transform(test_input)
+                    num_features = 24
+                except:
+                    num_features = "unknown"
+            print(f"  - Scaler type: {type(self.scaler).__name__}")
+            print(f"  - Scaler expects {num_features} features")
+            
+            # Device selection
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            print(f"Using device: {self.device}")
+            
+            # Initialize model architecture (input_size=24, num_classes=4)
+            print(f"Loading EmotionNet model from: {MODEL_PATH}")
+            self.model = EmotionNet(input_size=24, num_classes=4)
+            
+            # Load weights
+            print(f"  Loading state dict...")
+            state_dict = torch.load(MODEL_PATH, map_location=self.device)
+            print(f"  State dict keys: {list(state_dict.keys())[:5]}... (showing first 5)")
+            
+            # Verify model architecture matches
+            try:
+                self.model.load_state_dict(state_dict)
+                print(f"  ✓ State dict loaded successfully")
+            except RuntimeError as e:
+                print(f"  ❌ ERROR: Model architecture mismatch!")
+                print(f"  Error: {e}")
+                print(f"  This means the saved model doesn't match the current architecture.")
+                print(f"  Expected model structure:")
+                for name, param in self.model.named_parameters():
+                    print(f"    {name}: {param.shape}")
+                raise
+            
+            self.model = self.model.to(self.device)
+            self.model.eval()  # Set to evaluation mode (disables dropout)
+            
+            # Test model with dummy input to verify it works
+            print(f"  Testing model with dummy input...")
+            dummy_input = torch.randn(1, 24).to(self.device)
+            with torch.no_grad():
+                dummy_output = self.model(dummy_input)
+                dummy_probs = torch.nn.functional.softmax(dummy_output, dim=1)
+            print(f"  ✓ Model test successful")
+            print(f"  Dummy output: {dummy_output[0].cpu().numpy()}")
+            print(f"  Dummy probs: {dummy_probs[0].cpu().numpy()}")
+            
+            if np.allclose(dummy_probs[0].cpu().numpy(), [0.25, 0.25, 0.25, 0.25], atol=0.01):
+                print(f"  ⚠️ WARNING: Model outputs uniform probabilities on random input!")
+                print(f"  This suggests the model weights might not be trained properly.")
+            
+            print(f"  ✓ Model loaded successfully")
+            print(f"  - Input size: 24 features (16 log powers + 8 asymmetry)")
+            print(f"  - Output classes: {MODEL_CLASSES}")
+            print("=" * 60)
             
         except Exception as e:
-            print(f"Błąd ładowania modelu: {e}")
+            print(f"\n{'='*60}")
+            print(f"❌ CRITICAL ERROR LOADING MODEL 2.2")
+            print(f"{'='*60}")
+            print(f"Error: {e}")
+            print(f"\nFull traceback:")
             import traceback
             traceback.print_exc()
+            print(f"\n{'='*60}")
+            print(f"MODEL AND SCALER SET TO None - PREDICTIONS WILL FAIL")
+            print(f"{'='*60}\n")
             self.model = None
-            self.gb_model = None
+            self.scaler = None
             self.device = torch.device('cpu')
+            
+            # Don't silently continue - raise the error so it's clear
+            # But allow the detector to start so status checks can work
+            print("⚠️ WARNING: Detector will start but cannot make predictions!")
+            print("   Fix the model loading error and restart the server.")
 
     def start(self):
-        if self.running: return
+        if self.running:
+            return
         self.running = True
-        print("="*80)
-        print("STARTING EMOTION DETECTOR - ALL LOGGING ENABLED")
-        print("="*80)
+        print("=" * 80)
+        print("STARTING EMOTION DETECTOR - MODEL 2.2")
+        print("=" * 80)
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.thread.start()
-        print("✓ Detektor uruchomiony w tle. Thread started.")
-        print("="*80)
+        print("✓ Detector thread started.")
 
     def stop(self):
         self.running = False
@@ -167,150 +264,229 @@ class EmotionDetector:
             self.thread.join()
 
     def get_data(self):
+        """Get current emotion state for WebSocket transmission. ONLY REAL EEG DATA."""
         with self.lock:
             current_time = time.time()
-            data_age = current_time - self.last_state_update_time
+            data_age = current_time - self.last_state_update_time if self.last_state_update_time > 0 else 0
             
-            # Add diagnostic info including freshness metrics
+            # Copy probabilities to ensure we're not sending a reference
+            # Convert to native Python floats to ensure JSON serialization works correctly
+            if self.current_probs:
+                probs_copy = [float(p) for p in self.current_probs]
+            else:
+                probs_copy = [0.0, 0.0, 0.0, 0.0]
+            
+            # Log what we're reading (every call for debugging)
+            self._get_data_call_count += 1
+            prob_str = ', '.join([f'{p:.3f}' for p in probs_copy])
+            if self._get_data_call_count <= 5 or self._get_data_call_count % 10 == 0:
+                print(f"[get_data #{self._get_data_call_count}] emotion={self.current_emotion}, probs=[{prob_str}], age={data_age:.3f}s, last_update={self.last_state_update_time:.3f}")
+                print(f"  → self.current_probs id={id(self.current_probs)}, probs_copy id={id(probs_copy)}")
+                print(f"  → self.current_probs values={self.current_probs}")
+                print(f"  → probs_copy values={probs_copy}")
+            
+            # NO MOCK DATA - always real EEG data
             data = {
                 "emotion": self.current_emotion,
-                "probabilities": self.current_probs,
+                "probabilities": probs_copy,
                 "history": list(self.history),
-                "is_mock": self.is_mock,
-                "data_age": data_age,  # How old is this data in seconds
+                "is_mock": False,  # Always False - no mock data
+                "data_age": data_age,
                 "last_update_time": self.last_state_update_time,
                 "buffer_fill_rate": self.buffer_fill_rate,
                 "prediction_rate": self.prediction_rate
             }
             
-            # Verify probabilities are valid
-            if len(self.current_probs) == 4:
-                prob_sum = sum(self.current_probs)
-                if abs(prob_sum - 1.0) > 0.01:  # Should sum to ~1.0
-                    print(f"[WARNING] Probabilities sum to {prob_sum:.4f}, expected ~1.0")
-            
-            # Warn if data is stale
-            if data_age > 1.0 and self.last_state_update_time > 0:
-                print(f"[STALE DATA WARNING] Data is {data_age:.2f}s old - predictions may not be running!")
-            
             return data
 
     def _run_loop(self):
-        print_flush("="*80)
-        print_flush("EMOTION DETECTOR - STARTING LSL STREAM DETECTION")
-        print_flush("="*80)
-        print_flush("Szukanie strumienia EEG (LSL)...")
-        print_flush("Upewnij się, że aplikacja BrainAccess Board jest uruchomiona i streamuje dane.")
+        """Main loop: connect to LSL stream and process EEG data."""
+        print_flush("=" * 80)
+        print_flush("EMOTION DETECTOR - SEARCHING FOR EEG STREAM")
+        print_flush("=" * 80)
+        print_flush("Looking for EEG stream (LSL)...")
+        print_flush("Make sure BrainAccess Board is running and streaming.")
         sys.stdout.flush()
         
-        # First, try to find all streams for debugging
-        print("Skanowanie dostępnych strumieni LSL...")
-        all_streams = resolve_streams(wait_time=2.0)
+        # Scan for available LSL streams with longer timeout
+        print("Scanning for LSL streams (this may take up to 10 seconds)...")
+        print("Make sure BrainAccess Board is running with LSL streaming enabled!")
+        all_streams = resolve_streams(wait_time=10.0)
+        
         if all_streams:
-            print(f"Znaleziono {len(all_streams)} strumieni LSL:")
+            print(f"\n✓ Found {len(all_streams)} LSL stream(s) in network:")
             for i, stream in enumerate(all_streams):
-                print(f"  Stream {i+1}: Name='{stream.name()}', Type='{stream.type()}', Source='{stream.source_id()}'")
+                print(f"  Stream {i+1}:")
+                print(f"    Name: '{stream.name()}'")
+                print(f"    Type: '{stream.type()}'")
+                print(f"    Source ID: '{stream.source_id()}'")
+                print(f"    Channels: {stream.channel_count()}")
+                print(f"    Sampling Rate: {stream.nominal_srate()} Hz")
         else:
-            print("Brak strumieni LSL w sieci.")
+            print("\n✗ No LSL streams found in network.")
+            print("\nTROUBLESHOOTING:")
+            print("  1. Is BrainAccess Board application running?")
+            print("  2. Is the device connected to BrainAccess Board?")
+            print("  3. Is LSL streaming enabled in BrainAccess Board?")
+            print("  4. Check firewall settings (LSL uses UDP broadcast)")
+            print("  5. Try running: python diagnose_lsl.py")
         
-        # Try to find EEG stream by type
-        streams = resolve_byprop('type', 'EEG', timeout=3.0)
+        # Try to find EEG stream by type (case-insensitive search)
+        print("\nSearching for EEG stream by type='EEG'...")
+        streams = resolve_byprop('type', 'EEG', timeout=5.0)
         
-        # If not found by type, try to find any stream with 'BrainAccess' in name
+        # If not found, try case-insensitive alternative search
         if not streams:
-            print("Nie znaleziono strumienia typu 'EEG', szukam alternatywnych...")
-            all_streams = resolve_streams(wait_time=2.0)
+            print("No stream with type='EEG' found, trying case-insensitive search...")
             if all_streams:
                 for stream in all_streams:
                     stream_name = stream.name().lower()
                     stream_type = stream.type().lower()
-                    if 'brainaccess' in stream_name or 'eeg' in stream_type or 'eeg' in stream_name:
-                        print(f"Znaleziono alternatywny strumień: {stream.name()} (type: {stream.type()})")
+                    # More flexible matching
+                    if ('brainaccess' in stream_name or 
+                        'eeg' in stream_type or 
+                        'eeg' in stream_name or
+                        'electroencephalography' in stream_type or
+                        stream.channel_count() >= 4):  # EEG typically has 4+ channels
+                        print(f"  → Found potential EEG stream: '{stream.name()}' (type: '{stream.type()}')")
                         streams = [stream]
                         break
+            else:
+                print("  → No streams available for alternative search.")
         
         if not streams:
-            print("Nie znaleziono strumienia EEG! Przełączanie w tryb MOCK (symulacja).")
-            print("Sprawdź czy:")
-            print("1. Urządzenie jest włączone.")
-            print("2. Aplikacja BrainAccess Board streamuje (LSL) - włącz LSL Stream w interfejsie.")
-            print("3. Jesteś w tej samej sieci (jeśli dotyczy).")
-            self.is_mock = True
-            self._run_mock_loop()
+            print("\n⚠️ No EEG stream found!")
+            print("   Waiting for device to connect...")
+            print("   Make sure BrainAccess Board is running with LSL streaming enabled.")
+            # Keep trying to connect - no mock fallback
+            time.sleep(5.0)
+            self._run_loop()  # Retry connection
             return
 
-        print(f"Znaleziono strumień: {streams[0].name()} (type: {streams[0].type()})")
+        print(f"✓ Found stream: {streams[0].name()} (type: {streams[0].type()})")
+        
+        print("\n" + "="*80)
+        print("🎯 BCI CONNECTED - RECEIVING REAL EEG DATA")
+        print("="*80)
+        print("✓ Connected to BrainAccess EEG stream")
+        print("="*80 + "\n")
+        
         inlet = StreamInlet(streams[0])
         
-        # Wait a moment for the inlet to fully connect
-        print("Inicjalizowanie połączenia...")
-        time.sleep(0.5)
+        # Initialize connection
+        print("Initializing connection...")
+        time.sleep(1.0)
         
-        # Verify that data is actually being streamed before declaring connection
-        print("Weryfikowanie połączenia - oczekiwanie na dane...")
-        verification_timeout = 5.0  # Increased timeout to 5 seconds
+        # Verify data is being received
+        print("Verifying connection - waiting for data...")
+        verification_timeout = 8.0
         verification_start = time.time()
         verified = False
-        chunks_received = 0
+        samples_received = 0
         
         while time.time() - verification_start < verification_timeout:
-            chunk, timestamps = inlet.pull_chunk(timeout=0.5)
-            if chunk and len(chunk) > 0:
-                chunks_received += len(chunk)
-                if chunks_received >= 10:  # Wait for at least 10 samples
-                    verified = True
-                    print(f"Zweryfikowano połączenie! Otrzymano {chunks_received} próbek.")
-                    break
+            try:
+                chunk, timestamps = inlet.pull_chunk(timeout=0.5)
+                if chunk and len(chunk) > 0:
+                    samples_received += len(chunk)
+                    print(f"  ✓ Received chunk: {len(chunk)} samples")
+                    if samples_received >= 1:
+                        verified = True
+                        print(f"✓ Connection verified! Received {samples_received} samples.")
+                        break
+            except Exception as e:
+                print(f"  Verification error: {e}")
+                time.sleep(0.5)
         
         if not verified:
-            print(f"UWAGA: Znaleziono strumień '{streams[0].name()}', ale otrzymano tylko {chunks_received} próbek w ciągu {verification_timeout}s!")
-            print("Urządzenie może nie streamować danych lub strumień jest pusty.")
-            print("Przełączanie w tryb MOCK (symulacja).")
-            self.is_mock = True
-            self._run_mock_loop()
-            return
+            print(f"⚠️ Stream found but limited data received. Continuing anyway...")
         
-        print("Połączono z BrainAccess i otrzymywanie danych!")
+        print("\n" + "="*80)
+        print("✅ CONNECTED TO BRAINACCESS - RECEIVING LIVE EEG DATA")
+        print("="*80 + "\n")
         
+        # Data buffers
         raw_buffer = deque(maxlen=BUFFER_LENGTH)
-        prediction_buffer = deque(maxlen=1) # NO smoothing - show raw predictions immediately
         consecutive_no_data_count = 0
-        max_no_data_count = 10  # Switch to mock after 10 consecutive timeouts
+        max_no_data_count = 10
         last_prediction_time = 0
-        PREDICTION_INTERVAL = 0.1  # Make prediction every 0.1 seconds (10 Hz) to match WebSocket
+        PREDICTION_INTERVAL = 0.1  # 10 Hz prediction rate
         prediction_count = 0
-        last_buffer_hash = None  # Track if buffer content is actually changing
-        last_prediction_data_hash = None  # Track if predictions are actually different
         total_samples_received = 0
         chunk_count = 0
-        last_sample_display_time = 0
-        SAMPLE_DISPLAY_INTERVAL = 1.0  # Show samples every 1 second
         
-        # CRITICAL FIX: Track data flow metrics
-        samples_received_times = deque(maxlen=100)  # Track sample receipt times
-        prediction_times = deque(maxlen=100)  # Track prediction times
-        loop_start_time = time.time()
+        # Rate tracking
+        samples_received_times = deque(maxlen=100)
+        prediction_times = deque(maxlen=100)
+        
+        # Status reporting
+        last_status_time = time.time()
+        STATUS_INTERVAL = 5.0  # Print status every 5 seconds
+        
+        def print_status():
+            """Print current connection and processing status"""
+            current_time = time.time()
+            with self.lock:
+                data_age = current_time - self.last_data_received_time if self.last_data_received_time > 0 else float('inf')
+                prediction_age = current_time - self.last_prediction_time if self.last_prediction_time > 0 else float('inf')
+                buffer_rate = self.buffer_fill_rate
+                pred_rate = self.prediction_rate
+                emotion = self.current_emotion
+                probs = self.current_probs
+            
+            print("\n" + "="*80)
+            print("📊 EEG CONNECTION STATUS")
+            print("="*80)
+            
+            # Connection status
+            if data_age < 2.0:
+                print("🟢 EEG STREAM: CONNECTED (receiving data)")
+            elif data_age < 5.0:
+                print("🟡 EEG STREAM: WARNING (data age: {:.1f}s)".format(data_age))
+            else:
+                print("🔴 EEG STREAM: DISCONNECTED (no data for {:.1f}s)".format(data_age))
+            
+            # Data reception
+            print(f"   • Samples received: {total_samples_received}")
+            print(f"   • Chunks processed: {chunk_count}")
+            print(f"   • Buffer fill: {len(raw_buffer)}/{BUFFER_LENGTH} samples")
+            print(f"   • Sample rate: {buffer_rate:.1f} Hz")
+            
+            # Prediction status
+            if prediction_age < 1.0:
+                print("🟢 PREDICTIONS: ACTIVE (last: {:.1f}s ago)".format(prediction_age))
+            elif prediction_age < 3.0:
+                print("🟡 PREDICTIONS: SLOW (last: {:.1f}s ago)".format(prediction_age))
+            else:
+                print("🔴 PREDICTIONS: INACTIVE (last: {:.1f}s ago)".format(prediction_age))
+            
+            print(f"   • Total predictions: {prediction_count}")
+            print(f"   • Prediction rate: {pred_rate:.1f} Hz")
+            
+            # Current state
+            prob_str = ', '.join([f'{p:.3f}' for p in probs])
+            print(f"   • Current emotion: {emotion}")
+            print(f"   • Probabilities: [{prob_str}]")
+            
+            print("="*80 + "\n")
         
         while self.running:
             try:
                 chunk, timestamps = inlet.pull_chunk(timeout=1.0)
-                samples_added = 0
                 
                 if chunk:
-                    consecutive_no_data_count = 0  # Reset counter on successful data
+                    consecutive_no_data_count = 0
                     chunk_count += 1
                     total_samples_received += len(chunk)
                     current_receive_time = time.time()
                     
-                    # CRITICAL FIX: Update data received timestamp
                     with self.lock:
                         self.last_data_received_time = current_receive_time
                     
-                    # Track sample receipt for rate calculation
+                    # Track sample rate
                     for _ in range(len(chunk)):
                         samples_received_times.append(current_receive_time)
                     
-                    # Calculate buffer fill rate (samples per second)
                     if len(samples_received_times) >= 2:
                         time_span = samples_received_times[-1] - samples_received_times[0]
                         if time_span > 0:
@@ -318,402 +494,291 @@ class EmotionDetector:
                             with self.lock:
                                 self.buffer_fill_rate = fill_rate
                     
-                    # Log chunk details
-                    samples_before = len(raw_buffer)
+                    # Print status periodically
+                    if time.time() - last_status_time >= STATUS_INTERVAL:
+                        print_status()
+                        last_status_time = time.time()
                     
-                    # ALWAYS display live BCI data for debugging
-                    current_time_display = time.time()
+                    # Log every 20th chunk
+                    if chunk_count % 20 == 0:
+                        print(f"\n[BCI DATA] Chunk #{chunk_count}: {len(chunk)} samples, "
+                              f"Total: {total_samples_received}, Buffer: {len(raw_buffer)}/{BUFFER_LENGTH}")
+                        if len(chunk) > 0:
+                            chunk_array = np.array(chunk)
+                            print(f"  Stats: min={chunk_array.min():.4f}, max={chunk_array.max():.4f}, "
+                                  f"mean={chunk_array.mean():.4f}, std={chunk_array.std():.4f}")
                     
-                    # Always show every chunk now
-                    print(f"\n{'='*80}")
-                    print(f"[BCI DATA - LIVE] Chunk #{chunk_count} received at {time.strftime('%H:%M:%S', time.localtime())}:")
-                    print(f"  - Samples in chunk: {len(chunk)}")
-                    print(f"  - Timestamps: {len(timestamps)} timestamps")
-                    print(f"  - Total samples received: {total_samples_received}")
-                    
-                    # Show first and last sample from chunk
-                    if len(chunk) > 0:
-                        first_sample = chunk[0]
-                        last_sample = chunk[-1] if len(chunk) > 1 else first_sample
-                        
-                        print(f"  - First sample (ch {len(first_sample)} channels): {[f'{v:.4f}' for v in first_sample[:8]]}{'...' if len(first_sample) > 8 else ''}")
-                        if len(chunk) > 1:
-                            print(f"  - Last sample: {[f'{v:.4f}' for v in last_sample[:8]]}{'...' if len(last_sample) > 8 else ''}")
-                        
-                        # Show statistics
-                        chunk_array = np.array(chunk)
-                        print(f"  - Data stats: min={chunk_array.min():.4f}, max={chunk_array.max():.4f}, "
-                              f"mean={chunk_array.mean():.4f}, std={chunk_array.std():.4f}")
-                        
-                        # Show channel-wise stats if multiple channels
-                        if chunk_array.ndim == 2 and chunk_array.shape[1] > 1:
-                            print(f"  - Channel-wise stats:")
-                            for ch in range(min(chunk_array.shape[1], 8)):  # Show first 8 channels
-                                ch_data = chunk_array[:, ch]
-                                print(f"    Ch{ch}: min={ch_data.min():.4f}, max={ch_data.max():.4f}, "
-                                      f"mean={ch_data.mean():.4f}, std={ch_data.std():.4f}")
-                    
-                    # Show timestamps if available
-                    if timestamps and len(timestamps) > 0:
-                        if len(timestamps) == 1:
-                            print(f"  - Timestamp: {timestamps[0]:.6f}")
-                        else:
-                            time_diff = timestamps[-1] - timestamps[0] if len(timestamps) > 1 else 0
-                            sample_rate_est = len(timestamps) / time_diff if time_diff > 0 else 0
-                            print(f"  - Timestamps: {timestamps[0]:.6f} to {timestamps[-1]:.6f} "
-                                  f"(span: {time_diff:.4f}s, est. rate: {sample_rate_est:.1f} Hz)")
-                    
-                    # Show ALL samples in chunk (limit to reasonable amount)
-                    print(f"  - Raw EEG samples (showing first 20 of {len(chunk)} samples):")
-                    for i, sample in enumerate(chunk[:20]):  # Show first 20 samples
-                        sample_str = [f'{v:8.4f}' for v in sample[:4]]  # First 4 channels
-                        print(f"    Sample {i:3d}: {sample_str}")
-                    if len(chunk) > 20:
-                        print(f"    ... ({len(chunk) - 20} more samples)")
-                    
-                    print(f"{'='*80}\n")
-                    
+                    # Add samples to buffer
                     for sample in chunk:
                         raw_buffer.append(sample)
-                    
-                    samples_added = len(raw_buffer) - samples_before
                 
-                # CRITICAL FIX: Check for prediction OUTSIDE chunk check
-                # This ensures we predict even if no new chunk arrived
+                # Check if we should make a prediction
                 current_time = time.time()
                 buffer_is_full = len(raw_buffer) >= BUFFER_LENGTH
-                buffer_nearly_full = len(raw_buffer) >= (BUFFER_LENGTH - 20)  # Allow 20 sample tolerance
+                buffer_nearly_full = len(raw_buffer) >= (BUFFER_LENGTH - 20)
                 time_for_prediction = (current_time - last_prediction_time) >= PREDICTION_INTERVAL
                 
-                # Calculate buffer health
-                buffer_fill_percentage = (len(raw_buffer) / BUFFER_LENGTH) * 100
-                
-                # Predict if buffer is full and enough time has passed
                 should_predict = buffer_is_full and time_for_prediction
                 
-                # SOLID FIX: Also predict if buffer is nearly full AND we have some data
-                # This prevents waiting forever for perfect buffer fill
+                # Also predict if buffer is nearly full and we have enough data
                 if not should_predict and buffer_nearly_full and time_for_prediction and len(raw_buffer) >= 200:
                     should_predict = True
-                    print(f"[BUFFER TOLERANCE] Predicting with buffer size {len(raw_buffer)}/{BUFFER_LENGTH} ({buffer_fill_percentage:.1f}% full)")
-                
-                # SOLID FIX: Log buffer health periodically
-                if chunk_count % 50 == 0 and len(raw_buffer) > 0:
-                    time_since_last_pred = current_time - last_prediction_time
-                    print(f"[BUFFER HEALTH] Size: {len(raw_buffer)}/{BUFFER_LENGTH} ({buffer_fill_percentage:.1f}%) | "
-                          f"Fill rate: {self.buffer_fill_rate:.1f} Hz | "
-                          f"Time since last pred: {time_since_last_pred:.3f}s | "
-                          f"Predictions/min: {self.prediction_rate * 60:.1f}")
                 
                 if should_predict:
-                        prediction_count += 1
-                        last_prediction_time = current_time
+                    prediction_count += 1
+                    last_prediction_time = current_time
+                    
+                    # Track prediction rate
+                    prediction_times.append(current_time)
+                    if len(prediction_times) >= 2:
+                        time_span = prediction_times[-1] - prediction_times[0]
+                        if time_span > 0:
+                            with self.lock:
+                                self.last_prediction_time = current_time
+                                self.prediction_rate = len(prediction_times) / time_span
+                    
+                    # Check if model is loaded
+                    if self.model is None:
+                        print("❌ CRITICAL ERROR: Model is None! Model failed to load during initialization.")
+                        print("   Check the startup logs for model loading errors.")
+                        print("   The detector cannot make predictions without a model.")
+                        time.sleep(5)
+                        continue
+                    if self.scaler is None:
+                        print("❌ CRITICAL ERROR: Scaler is None! Scaler failed to load during initialization.")
+                        print("   Check the startup logs for scaler loading errors.")
+                        print("   The detector cannot make predictions without a scaler.")
+                        time.sleep(5)
+                        continue
+                    
+                    # Convert buffer to numpy array
+                    raw_data = np.array(list(raw_buffer))
+                    
+                    # Ensure we have 4 channels
+                    if raw_data.shape[1] > 4:
+                        raw_data = raw_data[:, :4]
+                    elif raw_data.shape[1] < 4:
+                        print(f"Warning: Only {raw_data.shape[1]} channels, expected 4.")
+                        continue
+                    
+                    # Log prediction details
+                    print(f"\n{'#'*60}")
+                    print(f"# PREDICTION #{prediction_count}")
+                    print(f"# Buffer: {len(raw_buffer)} samples, {raw_data.shape[1]} channels")
+                    print(f"# Data range: [{raw_data.min():.4f}, {raw_data.max():.4f}]")
+                    print(f"{'#'*60}")
+                    
+                    # ===== MODEL 2.2 PIPELINE =====
+                    
+                    # Step 0: Preprocessing (demean to remove DC offset per channel)
+                    # This matches the reference implementation's preprocessing step
+                    raw_data = raw_data - np.mean(raw_data, axis=0)
+                    
+                    # Step 1: Extract log band power + asymmetry features (24 features)
+                    features = get_band_power(raw_data, fs=TARGET_FS)
+                    features = features.reshape(1, -1)  # Shape: (1, 24)
+                    
+                    # CRITICAL DEBUG: Check feature validity on EVERY prediction
+                    print(f"\n[PRED #{prediction_count}] FEATURE EXTRACTION:")
+                    print(f"  Raw data stats: shape={raw_data.shape}, range=[{raw_data.min():.4f}, {raw_data.max():.4f}], mean={raw_data.mean():.4f}")
+                    print(f"  Features shape: {features.shape}, count: {len(features[0])}")
+                    print(f"  Features range: [{features.min():.4f}, {features.max():.4f}]")
+                    print(f"  Features mean: {features.mean():.4f}, std: {features.std():.4f}")
+                    if np.any(np.isnan(features)) or np.any(np.isinf(features)):
+                        print(f"  ❌ ERROR: Invalid features detected (NaN or Inf)!")
+                        print(f"  NaN count: {np.sum(np.isnan(features))}, Inf count: {np.sum(np.isinf(features))}")
+                        continue
+                    if features.std() < 1e-6:
+                        print(f"  ⚠️ WARNING: Features have very low variance (std={features.std():.4f})")
+                    
+                    # Step 2: Scale features using the model_2.2 scaler
+                    try:
+                        features_scaled = self.scaler.transform(features)
+                    except Exception as e:
+                        print(f"  ❌ ERROR in scaler.transform: {e}")
+                        print(f"  Scaler expects {self.scaler.mean_.shape[0]} features, got {features.shape[1]}")
+                        continue
+                    
+                    # CRITICAL DEBUG: Check scaled features
+                    print(f"  Scaled features range: [{features_scaled.min():.4f}, {features_scaled.max():.4f}]")
+                    print(f"  Scaled features mean: {features_scaled.mean():.4f}, std: {features_scaled.std():.4f}")
+                    if np.any(np.isnan(features_scaled)) or np.any(np.isinf(features_scaled)):
+                        print(f"  ❌ ERROR: Invalid scaled features detected (NaN or Inf)!")
+                        continue
+                    
+                    # Step 3: Convert to tensor and run inference
+                    with torch.no_grad():
+                        input_tensor = torch.tensor(features_scaled, dtype=torch.float32).to(self.device)
+                        print(f"  Input tensor shape: {input_tensor.shape}, range: [{input_tensor.min():.4f}, {input_tensor.max():.4f}]")
                         
-                        # CRITICAL FIX: Track prediction rate
-                        prediction_times.append(current_time)
-                        if len(prediction_times) >= 2:
-                            time_span = prediction_times[-1] - prediction_times[0]
-                            if time_span > 0:
-                                pred_rate = len(prediction_times) / time_span
-                                with self.lock:
-                                    self.last_prediction_time = current_time
-                                    self.prediction_rate = pred_rate
+                        outputs = self.model(input_tensor)
+                        raw_outputs = outputs[0].cpu().numpy()
+                        print(f"  Model raw outputs (before softmax): {raw_outputs}")
+                        print(f"  Raw outputs range: [{raw_outputs.min():.4f}, {raw_outputs.max():.4f}]")
                         
-                        print(f"\n{'#'*80}")
-                        print(f"# MODEL PREDICTION #{prediction_count} - FEEDING DATA TO MODEL")
-                        print(f"{'#'*80}")
-                        
-                        # Sprawdzenie czy model został załadowany
-                        if self.model is None:
-                            print("BŁĄD: Model nie został załadowany! Sprawdź logi inicjalizacji.")
-                            time.sleep(1)
+                        if np.all(raw_outputs == 0) or np.all(np.abs(raw_outputs) < 1e-6):
+                            print(f"  ❌ ERROR: Model outputs are all zeros or near-zero!")
+                            print(f"  This means the model is not producing valid predictions!")
                             continue
                         
-                        # 1. Ekstrakcja cech (20 cech: 4 kanały * 5 pasm)
-                        # Convert buffer to numpy array - this creates a fresh copy each time
-                        # The buffer automatically maintains the most recent BUFFER_LENGTH samples
-                        raw_data = np.array(list(raw_buffer))  # Explicit copy to ensure fresh data
-                        
-                        # Check if data is actually changing by computing a hash of recent samples
-                        recent_samples_hash = hash(tuple(raw_data[-10:].flatten().tolist())) if len(raw_data) >= 10 else None
-                        data_is_changing = (recent_samples_hash != last_buffer_hash) if last_buffer_hash is not None else True
-                        last_buffer_hash = recent_samples_hash
-                        
-                        # DIAGNOSTIC: Check if data is completely static (all zeros or constant)
-                        data_variance = raw_data.var()
-                        data_std = raw_data.std()
-                        is_static = data_variance < 1e-10 or data_std < 1e-5
-                        
-                        if is_static and prediction_count > 3:
-                            print(f"[CRITICAL WARNING #{prediction_count}] Data appears STATIC! Variance: {data_variance:.10f}, Std: {data_std:.10f}")
-                            print(f"[CRITICAL] This suggests the BCI is not sending real EEG data or device is not properly connected!")
-                        
-                        # Show current buffer state with recent samples
-                        print(f"\n[BUFFER STATE #{prediction_count}]")
-                        print(f"  - Buffer size: {len(raw_buffer)}/{BUFFER_LENGTH} samples")
-                        print(f"  - Samples added from chunk: {samples_added}")
-                        print(f"  - Total samples received: {total_samples_received}")
-                        print(f"  - Recent samples (last 3):")
-                        if len(raw_buffer) >= 3:
-                            for i, sample in enumerate(list(raw_buffer)[-3:]):
-                                sample_str = [f'{v:.3f}' for v in sample[:4]]  # First 4 channels
-                                print(f"    Sample -{2-i}: {sample_str}{'...' if len(sample) > 4 else ''}")
-                        
-                        # Debug: log buffer statistics
-                        print(f"  - Data stats: range=[{raw_data.min():.4f}, {raw_data.max():.4f}], "
-                              f"mean={raw_data.mean():.4f}, std={raw_data.std():.4f}, "
-                              f"variance={data_variance:.6f}")
-                        print(f"  - Data status: Changing={data_is_changing}, Static={is_static}")
-                        
-                        # Show channel-wise variance to detect if specific channels are dead
-                        if raw_data.shape[1] >= 2:
-                            print(f"  - Channel variances:")
-                            for ch in range(min(raw_data.shape[1], 8)):
-                                ch_var = raw_data[:, ch].var()
-                                ch_std = raw_data[:, ch].std()
-                                ch_status = "✓" if ch_var > 1e-6 else "✗ DEAD"
-                                print(f"    Ch{ch}: var={ch_var:.8f}, std={ch_std:.6f} {ch_status}")
-                        
-                        if raw_data.shape[1] > 4:
-                            raw_data = raw_data[:, :4]
-                        elif raw_data.shape[1] < 4:
-                            print(f"Ostrzeżenie: Otrzymano tylko {raw_data.shape[1]} kanałów, oczekiwano 4.")
-                            continue
-                        
-                        # Extract features from the raw data (sliding window is automatic via deque)
-                        print(f"[MODEL INPUT #{prediction_count}] Extracting features from {raw_data.shape[0]} samples, {raw_data.shape[1]} channels...")
-                        features = extract_band_powers(raw_data, FS) # Shape (1, 20)
-                        
-                        # Debug: log feature statistics
-                        print(f"[MODEL INPUT #{prediction_count}] Features extracted (20 band powers):")
-                        print(f"  - Shape: {features.shape}")
-                        print(f"  - Stats: mean={features.mean():.6f}, std={features.std():.6f}, min={features.min():.6f}, max={features.max():.6f}")
-                        print(f"  - Feature values: {features.flatten().tolist()}")
-                        
-                        # 2. Preprocessing zgodny z model_v5: log1p przed poly transform
-                        print(f"[MODEL INPUT #{prediction_count}] Step 1: Applying log1p transform...")
-                        features_log = np.log1p(features)
-                        print(f"  - Log1p stats: mean={features_log.mean():.6f}, std={features_log.std():.6f}, min={features_log.min():.6f}, max={features_log.max():.6f}")
-                        
-                        # 3. Transformacja Wielomianowa (20 -> 230)
-                        print(f"[MODEL INPUT #{prediction_count}] Step 2: Applying polynomial transform (20 -> 230 features)...")
-                        poly_features = self.poly.transform(features_log)
-                        print(f"  - Poly shape: {poly_features.shape}, stats: mean={poly_features.mean():.6f}, std={poly_features.std():.6f}")
-                        
-                        # 4. Normalizacja
-                        print(f"[MODEL INPUT #{prediction_count}] Step 3: Applying scaler normalization...")
-                        scaled_features = self.scaler.transform(poly_features)
-                        print(f"  - Scaled shape: {scaled_features.shape}, stats: mean={scaled_features.mean():.6f}, std={scaled_features.std():.6f}")
-                        print(f"[MODEL INPUT #{prediction_count}] ✓ Data prepared and ready to feed to model")
-                        
-                        # 5. Inferencja z ensemble (jeśli dostępny)
-                        print(f"[MODEL RUN #{prediction_count}] Feeding data to neural network...")
-                        with torch.no_grad():
-                            input_tensor = torch.tensor(scaled_features, dtype=torch.float32).to(self.device)
-                            print(f"  - Input tensor shape: {input_tensor.shape}, device: {input_tensor.device}")
-                            logits = self.model(input_tensor)
-                            print(f"  - Raw logits: {logits.cpu().numpy()[0].tolist()}")
-                            p_res = torch.softmax(logits, dim=1).cpu().numpy()[0]
-                            print(f"[MODEL OUTPUT #{prediction_count}] ✓ Neural network returned probabilities:")
-                            print(f"  - ResNet probs: Boring={p_res[0]:.4f}, Calm={p_res[1]:.4f}, Horror={p_res[2]:.4f}, Funny={p_res[3]:.4f}")
-                        
-                        # Ensemble z gradient boosting (jeśli dostępny)
-                        if self.gb_model is not None:
-                            print(f"[MODEL RUN #{prediction_count}] Running Gradient Boosting ensemble...")
-                            p_gb = self.gb_model.predict_proba(scaled_features)[0]
-                            print(f"  - GB probs: Boring={p_gb[0]:.4f}, Calm={p_gb[1]:.4f}, Horror={p_gb[2]:.4f}, Funny={p_gb[3]:.4f}")
-                            # Ważona kombinacja: 60% ResNet, 40% GB (zgodnie z model_v5)
-                            final_probs = 0.6 * p_res + 0.4 * p_gb
-                            print(f"[MODEL OUTPUT #{prediction_count}] ✓ Ensemble final probabilities:")
-                            print(f"  - Final probs: Boring={final_probs[0]:.4f}, Calm={final_probs[1]:.4f}, Horror={final_probs[2]:.4f}, Funny={final_probs[3]:.4f}")
-                        else:
-                            # Fallback: tylko ResNet jeśli gb_model nie jest dostępny
-                            final_probs = p_res
-                            print(f"[MODEL OUTPUT #{prediction_count}] ✓ Using ResNet only (no ensemble)")
-                        
-                        # Check if prediction is actually different from last one
-                        prob_hash = hash(tuple(final_probs.round(6)))  # Round to avoid float precision issues
-                        prob_is_changing = (prob_hash != last_prediction_data_hash) if last_prediction_data_hash is not None else True
-                        last_prediction_data_hash = prob_hash
-                        
-                        # Debug: log raw prediction before smoothing
-                        raw_prob_str = ' '.join([f'{p:.4f}' for p in final_probs])
-                        print(f"[DEBUG #{prediction_count}] Raw model output: [{raw_prob_str}] | Prediction changing: {prob_is_changing}")
-                        
-                        # 6. Use raw probabilities (no smoothing for now to see changes immediately)
-                        avg_probs = final_probs.copy()  # Use raw probabilities directly
-                        pred_idx = np.argmax(avg_probs)
-                        
-                        # Debug: log final probabilities
-                        prob_str_final = ' '.join([f'{p:.4f}' for p in avg_probs])
-                        print(f"[DEBUG #{prediction_count}] Final probs (no smoothing): [{prob_str_final}]")
-                        
-                        # 7. Mapowanie na etykietę frontendu
-                        # Jeśli pewność jest zbyt niska, wracamy do neutralnego
-                        if avg_probs[pred_idx] < CONFIDENCE_THRESHOLD:
-                            label = "neutral"
-                        else:
-                            model_label = MODEL_CLASSES[pred_idx]
-                            label = MODEL_TO_FRONTEND_MAP.get(model_label, "neutral")
-                        
-                        # Final logging
-                        prob_str = ' '.join([f'{p:.3f}' for p in avg_probs])
-                        print(f"[RESULT #{prediction_count}] {model_label} -> {label} | Final Probs: [{prob_str}] | Confidence: {avg_probs[pred_idx]:.3f}")
-                        print("-" * 80)
-                        
-                        # CRITICAL FIX: Always update state with timestamp to track freshness
-                        print(f"[STATE UPDATE #{prediction_count}] Updating internal state...")
-                        update_timestamp = time.time()
-                        with self.lock:
-                            old_probs = self.current_probs.copy() if hasattr(self.current_probs, 'copy') else list(self.current_probs)
-                            old_emotion = self.current_emotion
-                            
-                            self.current_emotion = label
-                            self.current_probs = avg_probs.tolist()
-                            self.last_state_update_time = update_timestamp  # CRITICAL: Track when state was last updated
-                            self.history.append({
-                                "time": update_timestamp,
-                                "probs": avg_probs.tolist(),
-                                "label": label
-                            })
-                            
-                            # Verify update happened
-                            probs_changed = not np.allclose(old_probs, self.current_probs, atol=1e-6)
-                            emotion_changed = (old_emotion != label)
-                            
-                            print(f"[STATE UPDATE #{prediction_count}] ✓ State updated at {update_timestamp:.3f}:")
-                            print(f"  - Emotion: {old_emotion} -> {label} {'(CHANGED)' if emotion_changed else '(same)'}")
-                            print(f"  - Probs: {[f'{p:.4f}' for p in old_probs]} -> {[f'{p:.4f}' for p in self.current_probs]}")
-                            print(f"  - Probabilities changed: {probs_changed}")
-                            print(f"  - State age: 0.000s (fresh)")
-                            
-                            if not probs_changed and prediction_count > 1:
-                                print(f"[WARNING #{prediction_count}] ⚠ Probabilities did NOT change in state update!")
-                            else:
-                                print(f"[STATE UPDATE #{prediction_count}] ✓ Probabilities updated successfully")
-                        
-                        print(f"{'#'*80}")
-                        print(f"# END PREDICTION #{prediction_count}")
-                        print(f"{'#'*80}\n")
-                # SOLID FIX: Handle case when no chunk received - still try to predict if buffer has data
+                        probs = torch.nn.functional.softmax(outputs, dim=1)
+                    
+                    # Get raw probabilities from model
+                    raw_probs = probs[0].cpu().numpy()
+                    
+                    # CRITICAL DEBUG: Check model outputs
+                    print(f"  Model probabilities (after softmax): {raw_probs}")
+                    print(f"  Probabilities sum: {raw_probs.sum():.4f} (should be ~1.0)")
+                    if np.all(raw_probs == 0) or np.any(np.isnan(raw_probs)):
+                        print(f"  ❌ ERROR: Model probabilities are all zeros or NaN!")
+                        print(f"  This is the problem! Model is not working correctly.")
+                        continue
+                    
+                    if np.allclose(raw_probs, [0.25, 0.25, 0.25, 0.25], atol=0.01):
+                        print(f"  ⚠️ WARNING: Probabilities are uniform (model might not be trained or loaded correctly)")
+                    
+                    # ===== PREDICTION SMOOTHING =====
+                    # Add raw prediction to smoothing buffer
+                    self.prediction_buffer.append(raw_probs.copy())
+                    print(f"  Added to smoothing buffer (size: {len(self.prediction_buffer)})")
+                    
+                    # Calculate smoothed probabilities (average over buffer)
+                    if len(self.prediction_buffer) >= 3:  # Need at least 3 predictions
+                        buffer_array = np.array(list(self.prediction_buffer))
+                        final_probs = np.mean(buffer_array, axis=0)
+                        print(f"  Smoothed from {len(self.prediction_buffer)} predictions")
+                    else:
+                        final_probs = raw_probs
+                        print(f"  Using raw (buffer has {len(self.prediction_buffer)} predictions)")
+                    
+                    # Normalize to ensure sum = 1
+                    prob_sum = final_probs.sum()
+                    final_probs = final_probs / (prob_sum + 1e-10)
+                    print(f"  Final probs after smoothing: {final_probs}")
+                    print(f"  Final probs sum: {final_probs.sum():.4f}")
+                    
+                    if np.all(final_probs == 0) or np.any(np.isnan(final_probs)):
+                        print(f"  ❌ ERROR: Final probabilities are all zeros or NaN after smoothing!")
+                        continue
+                    
+                    # Get prediction from smoothed probabilities
+                    pred_idx = np.argmax(final_probs)
+                    print(f"  Predicted class index: {pred_idx} ({MODEL_CLASSES[pred_idx]})")
+                    
+                    # ===== END MODEL 2.2 PIPELINE =====
+                    
+                    # Map to frontend label
+                    if final_probs[pred_idx] < CONFIDENCE_THRESHOLD:
+                        label = "neutral"
+                    else:
+                        model_label = MODEL_CLASSES[pred_idx]
+                        label = MODEL_TO_FRONTEND_MAP.get(model_label, "neutral")
+                    
+                    # Log prediction result every 20th prediction (reduce spam)
+                    if prediction_count % 20 == 0:
+                        raw_prob_str = ', '.join([f'{raw_probs[i]:.2f}' for i in range(4)])
+                        smooth_prob_str = ', '.join([f'{MODEL_CLASSES[i]}={final_probs[i]:.3f}' for i in range(4)])
+                        print(f"[MODEL #{prediction_count}] {MODEL_CLASSES[pred_idx]} -> {label}")
+                        print(f"  Raw: [{raw_prob_str}] | Smoothed: [{smooth_prob_str}]")
+                    
+                    # Update state - REAL EEG DATA
+                    update_timestamp = time.time()
+                    
+                    # Create a deep copy of probabilities to prevent any reference issues
+                    probs_to_store = [float(p) for p in final_probs.tolist()]
+                    
+                    with self.lock:
+                        self.current_emotion = label
+                        self.current_probs = probs_to_store  # Store deep copy
+                        self.last_state_update_time = update_timestamp
+                        self.history.append({
+                            "time": update_timestamp,
+                            "probs": probs_to_store.copy(),  # Deep copy for history too
+                            "label": label
+                        })
+                    
+                    # Log every prediction with what we're storing
+                    prob_str = ', '.join([f'{p:.3f}' for p in probs_to_store])
+                    print(f"[STATE←EEG #{prediction_count}] {label} | Probs=[{prob_str}]")
+                    print(f"  Storing probabilities: {probs_to_store}")
+                    
+                    # Immediately verify what's stored
+                    with self.lock:
+                        stored_probs = list(self.current_probs)
+                        stored_emotion = self.current_emotion
+                    stored_prob_str = ', '.join([f'{p:.3f}' for p in stored_probs])
+                    
+                    print(f"  Verification - Stored probs: {stored_probs}")
+                    print(f"  Verification - Stored emotion: {stored_emotion}")
+                    
+                    if stored_prob_str != prob_str:
+                        print(f"  ❌ MISMATCH! Stored probs differ from what we tried to store!")
+                        print(f"  Tried to store: [{prob_str}]")
+                        print(f"  Actually stored: [{stored_prob_str}]")
+                    else:
+                        print(f"  ✓ STORED CORRECTLY: emotion={stored_emotion}, probs=[{stored_prob_str}]")
+                    
+                    # Check if stored probs are all zeros
+                    if np.allclose(stored_probs, [0, 0, 0, 0], atol=1e-6):
+                        print(f"  ❌ CRITICAL ERROR: Stored probabilities are all zeros!")
+                        print(f"  This is why the frontend is getting 0,0,0,0!")
+                    else:
+                        print(f"  ✓ Stored probabilities are non-zero: max={max(stored_probs):.4f}")
+                
+                # Handle no data received
                 if not chunk:
                     consecutive_no_data_count += 1
                     
-                    # Even without new chunk, try to predict if buffer has data and enough time passed
-                    # This ensures continuous predictions even with slow/inconsistent data stream
-                    if len(raw_buffer) >= 200:  # If we have most of buffer
-                        current_time = time.time()
-                        buffer_nearly_full = len(raw_buffer) >= (BUFFER_LENGTH - 20)
-                        time_for_prediction = (current_time - last_prediction_time) >= PREDICTION_INTERVAL
-                        
-                        if buffer_nearly_full and time_for_prediction:
-                            # Force prediction even without new chunk
-                            print(f"[NO CHUNK PREDICTION] No new chunk, but predicting from existing buffer ({len(raw_buffer)} samples)")
-                            # Will predict on next iteration
+                    # Print status when no data is received
+                    if time.time() - last_status_time >= STATUS_INTERVAL:
+                        print_status()
+                        last_status_time = time.time()
                     
                     if consecutive_no_data_count >= max_no_data_count:
-                        print(f"UWAGA: Brak danych z urządzenia przez {max_no_data_count} sekund!")
-                        print("Urządzenie prawdopodobnie zostało wyłączone lub rozłączone.")
-                        print("Przełączanie w tryb MOCK (symulacja).")
-                        with self.lock:
-                            self.is_mock = True
-                        self._run_mock_loop()
-                        return
+                        print(f"\n⚠️⚠️⚠️ NO DATA RECEIVED FOR {max_no_data_count} SECONDS! ⚠️⚠️⚠️")
+                        print(f"   This usually means the EEG device disconnected.")
+                        print(f"   Checking stream status...")
+                        
+                        # Check if stream still exists
+                        try:
+                            check_streams = resolve_byprop('type', 'EEG', timeout=2.0)
+                            if check_streams:
+                                print(f"  ✓ Stream still exists in network, but no data flowing.")
+                                print(f"  → Check BrainAccess Board connection")
+                                print(f"  → Verify device is powered on")
+                                consecutive_no_data_count = 0
+                                continue
+                            else:
+                                print(f"  ✗ Stream lost from network - attempting to reconnect...")
+                                time.sleep(2.0)
+                                self._run_loop()  # Retry connection
+                                return
+                        except Exception as e:
+                            print(f"  Error checking stream: {e}")
+                            time.sleep(2.0)
+                            self._run_loop()  # Retry connection
+                            return
                             
             except Exception as e:
-                print(f"Błąd w pętli: {e}")
+                print(f"Error in loop: {e}")
+                import traceback
+                traceback.print_exc()
                 consecutive_no_data_count += 1
                 if consecutive_no_data_count >= max_no_data_count:
-                    print(f"UWAGA: Wystąpił błąd i brak danych przez {max_no_data_count} sekund!")
-                    print("Przełączanie w tryb MOCK (symulacja).")
-                    self.is_mock = True
-                    self._run_mock_loop()
+                    print("Too many errors, attempting to reconnect...")
+                    time.sleep(2.0)
+                    self._run_loop()  # Retry connection
                     return
                 time.sleep(1)
 
-    def _run_mock_loop(self):
-        """Symuluje działanie detektora bez urządzenia. Periodically checks for real connection."""
-        import random
-        print("Uruchomiono tryb symulacji.")
-        print("UWAGA: System będzie okresowo sprawdzał dostępność urządzenia (co 10 sekund).")
-        
-        # Mockowe emocje do cyklicznego przełączania (zgodne z frontendem)
-        mock_emotions = ["neutral", "calm", "happy", "sad", "angry"]
-        current_mock_idx = 0
-        last_switch_time = time.time()
-        last_reconnect_check = time.time()
-        reconnect_check_interval = 10.0  # Check every 10 seconds
-        found_streams = None  # Track if we found streams to reconnect
-        
-        while self.running:
-            # Periodically check if real device becomes available
-            if time.time() - last_reconnect_check > reconnect_check_interval:
-                last_reconnect_check = time.time()
-                print("Sprawdzanie dostępności urządzenia...")
-                found_streams = resolve_byprop('type', 'EEG', timeout=2.0)
-                if not found_streams:
-                    all_streams = resolve_streams(wait_time=1.0)
-                    if all_streams:
-                        for stream in all_streams:
-                            stream_name = stream.name().lower()
-                            stream_type = stream.type().lower()
-                            if 'brainaccess' in stream_name or 'eeg' in stream_type or 'eeg' in stream_name:
-                                found_streams = [stream]
-                                break
-                
-                if found_streams:
-                    print(f"Wykryto urządzenie! Przełączanie z trybu symulacji na rzeczywiste połączenie...")
-                    print(f"Strumień: {found_streams[0].name()} (type: {found_streams[0].type()})")
-                    # Exit mock loop and start real connection
-                    break
-            
-            # Co 5 sekund zmiana emocji
-            if time.time() - last_switch_time > 5.0:
-                current_mock_idx = (current_mock_idx + 1) % len(mock_emotions)
-                last_switch_time = time.time()
-            
-            emotion = mock_emotions[current_mock_idx]
-            
-            # Generuj prawdopodobieństwa zgodne z 4-klasowym modelem
-            # Mapowanie: neutral=0, calm=1, happy=2, sad=3, angry=3 (używamy angry jako Horror)
-            probs = [0.1] * 4
-            if emotion == "neutral":
-                probs[0] = 0.7  # Boring
-            elif emotion == "calm":
-                probs[1] = 0.7  # Calm
-            elif emotion == "happy":
-                probs[3] = 0.7  # Funny
-            elif emotion == "sad":
-                probs[0] = 0.7  # Boring (closest to sad)
-            elif emotion == "angry":
-                probs[2] = 0.7  # Horror
-            
-            with self.lock:
-                self.current_emotion = emotion
-                self.current_probs = probs
-                self.history.append({
-                    "time": time.time(),
-                    "probs": self.current_probs,
-                    "label": emotion
-                })
-            
-            time.sleep(0.1) # 10Hz update rate
-        
-        # If we broke out of mock loop, try to connect to real device
-        if self.running and found_streams:
-            print("Próba połączenia z wykrytym urządzeniem...")
-            # Restart the main loop to connect
-            self._run_loop()
-            return
-
 if __name__ == "__main__":
-    # Tryb standalone (testowy)
+    # Standalone test mode
     detector = EmotionDetector()
     detector.start()
     try:
         while True:
             data = detector.get_data()
-            print(f"Stan: {data['emotion']} | Probs: {data['probabilities']}")
+            print(f"State: {data['emotion']} | Probs: {[f'{p:.3f}' for p in data['probabilities']]}")
             time.sleep(0.5)
     except KeyboardInterrupt:
         detector.stop()

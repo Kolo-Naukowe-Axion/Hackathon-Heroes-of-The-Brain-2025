@@ -35,50 +35,75 @@ async def shutdown_event():
 async def read_index():
     return FileResponse('static/index.html')
 
+@app.get("/status")
+async def get_status():
+    """Debug endpoint to check BCI connection status"""
+    data = detector.get_data()
+    return {
+        "is_mock": data.get('is_mock', True),
+        "emotion": data.get('emotion', 'unknown'),
+        "probabilities": data.get('probabilities', []),
+        "data_age": data.get('data_age', 0),
+        "buffer_fill_rate": data.get('buffer_fill_rate', 0),
+        "prediction_rate": data.get('prediction_rate', 0)
+    }
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    last_sent_data = None
+    # Check current mode status
+    initial_data = detector.get_data()
+    is_mock_initial = initial_data.get('is_mock', True)
+    
+    print("="*60)
+    print("🔌 WEBSOCKET CLIENT CONNECTED!")
+    print("✅ REAL EEG DATA ONLY - NO MOCK DATA")
+    print("="*60)
+    
     send_count = 0
+    last_sent_probs = None
+    last_sent_emotion = None
     try:
         while True:
             data = detector.get_data()
             send_count += 1
             
-            # Check if data actually changed
-            data_hash = hash(json.dumps(data))
-            data_changed = (data_hash != last_sent_data) if last_sent_data is not None else True
-            last_sent_data = data_hash
-            
-            # SOLID FIX: Enhanced WebSocket logging with data freshness check
+            # Extract key values
             probs = data.get('probabilities', [])
-            prob_str = ', '.join([f'{p:.4f}' for p in probs]) if isinstance(probs, list) else str(probs)
+            emotion = data.get('emotion', 'N/A')
+            
+            # Check if values actually changed
+            probs_changed = last_sent_probs is None or probs != last_sent_probs
+            emotion_changed = last_sent_emotion is None or emotion != last_sent_emotion
             data_age = data.get('data_age', 0)
-            buffer_fill_rate = data.get('buffer_fill_rate', 0)
-            prediction_rate = data.get('prediction_rate', 0)
             
-            # Log every 10th message to avoid spam, but always log warnings
-            should_log = (send_count % 10 == 0) or not data_changed or data_age > 0.5
+            # Always send if data is fresh (less than 0.2s old) or if values changed
+            should_send = probs_changed or emotion_changed or data_age < 0.2
             
-            if should_log:
-                print(f"[WEBSOCKET #{send_count}] Sending data | "
-                      f"Changed: {data_changed} | "
-                      f"Age: {data_age:.3f}s | "
-                      f"Fill rate: {buffer_fill_rate:.1f} Hz | "
-                      f"Pred rate: {prediction_rate:.1f}/s | "
-                      f"Emotion: {data.get('emotion', 'N/A')} | "
-                      f"Probs: [{prob_str}]")
+            if should_send:
+                # FORCE is_mock to False - no mock data exists
+                data['is_mock'] = False
+                
+                # Log when values change
+                prob_str = ', '.join([f'{p:.3f}' for p in probs]) if isinstance(probs, list) else str(probs)
+                if probs_changed or emotion_changed:
+                    print(f"[WS→FRONTEND #{send_count}] {emotion} | Probs=[{prob_str}] | Age={data_age:.3f}s | CHANGED")
+                elif send_count <= 5 or send_count % 50 == 0:
+                    print(f"[WS→FRONTEND #{send_count}] {emotion} | Probs=[{prob_str}] | Age={data_age:.3f}s")
+                
+                # Serialize and send
+                json_data = json.dumps(data)
+                await websocket.send_text(json_data)
+                
+                # Update last sent values
+                last_sent_probs = probs.copy() if isinstance(probs, list) else probs
+                last_sent_emotion = emotion
             
-            # Warn if data is stale or not changing
-            if data_age > 1.0:
-                print(f"[WEBSOCKET WARNING #{send_count}] ⚠ Data is STALE ({data_age:.2f}s old)! Predictions may not be running!")
-            elif not data_changed and send_count > 10:
-                print(f"[WEBSOCKET WARNING #{send_count}] ⚠ Sending same data again! Probabilities are not updating!")
-            
-            await websocket.send_text(json.dumps(data))
-            await asyncio.sleep(0.1) # 10Hz update rate
+            await asyncio.sleep(0.1)  # 10Hz update rate
     except WebSocketDisconnect:
-        print("Client disconnected")
+        print("="*60)
+        print("🔌 WEBSOCKET CLIENT DISCONNECTED!")
+        print("="*60)
     except Exception as e:
         print(f"WebSocket error: {e}")
         import traceback
