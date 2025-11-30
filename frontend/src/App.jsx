@@ -7,6 +7,7 @@ import SpotifyPlayer from 'react-spotify-web-playback';
 import { emotions } from './utils/emotions';
 import { BrainHero } from './components/BrainHero';
 import { BackgroundParticles } from './components/BackgroundParticles';
+import { DebugPanel } from './components/DebugPanel';
 import { redirectToAuthCodeFlow, getAccessToken } from './utils/auth';
 import { fetchPlaylistTracks } from './utils/spotify';
 
@@ -64,48 +65,150 @@ function App() {
   }, []);
 
   const [isMock, setIsMock] = useState(false);
+  const [probabilities, setProbabilities] = useState([0, 0, 0, 0]);
+  const [debugMode, setDebugMode] = useState(false);
+  
+  // Use ref to track previous probabilities for comparison (avoids closure issue)
+  const prevProbsRef = React.useRef([0, 0, 0, 0]);
+  const hasLoggedFirstUpdateRef = React.useRef(false);
 
-  // WebSocket Connection for Emotion Updates
+  // WebSocket Connection for Emotion Updates with reconnection logic
   useEffect(() => {
-    const ws = new WebSocket("ws://localhost:8000/ws");
-
-    ws.onopen = () => {
-      console.log("Connected to Emotion WebSocket");
-    };
-
-    ws.onmessage = (event) => {
+    let ws = null;
+    let reconnectTimeout = null;
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 10;
+    const baseReconnectDelay = 1000; // Start with 1 second
+    
+    const connect = () => {
       try {
-        const data = JSON.parse(event.data);
-        if (data.is_mock !== undefined) {
-          setIsMock(data.is_mock);
-          console.log(`BCI Mode: ${data.is_mock ? "Simulation" : "Connected"}`);
-        }
-        if (data.emotion) {
-          // Map backend emotion labels to frontend emotion indices
-          // Backend labels: "Neutral", "Happy", "Sad", "Angry", "Calm" (from mock/model)
-          // Frontend indices: 0=Neutral, 1=Calm, 2=Happy, 3=Sad, 4=Angry
-          let newIndex = 0;
-          switch (data.emotion.toLowerCase()) {
-            case 'neutral': newIndex = 0; break;
-            case 'calm': newIndex = 1; break;
-            case 'happy': newIndex = 2; break;
-            case 'sad': newIndex = 3; break;
-            case 'angry': newIndex = 4; break;
-            default: break; // Keep current if unknown
+        ws = new WebSocket("ws://localhost:8000/ws");
+
+        ws.onopen = () => {
+          console.log("Connected to Emotion WebSocket");
+          reconnectAttempts = 0; // Reset on successful connection
+          hasLoggedFirstUpdateRef.current = false; // Reset flag on reconnect
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            
+            // FORCE is_mock to false - no mock data exists anymore
+            setIsMock(false);
+            
+            // ALWAYS update probabilities - this is critical for debug panel
+            if (data.probabilities && Array.isArray(data.probabilities) && data.probabilities.length === 4) {
+              // Force update by creating new array reference
+              const newProbs = data.probabilities.map(p => typeof p === 'number' ? p : parseFloat(p));
+              
+              // Verify the values are actually numbers
+              if (newProbs.some(p => isNaN(p) || !isFinite(p))) {
+                console.error('[WS] Invalid probability values detected:', newProbs);
+                console.error('[WS] Raw data.probabilities:', data.probabilities);
+              } else {
+                // Compare with previous values using ref (not state closure)
+                const prevProbs = prevProbsRef.current;
+                const probsStr = newProbs.map(p => p.toFixed(3)).join(', ');
+                const prevStr = prevProbs.map(p => p.toFixed(3)).join(', ');
+                const valuesChanged = probsStr !== prevStr;
+                
+                // Log first update only once
+                if (!hasLoggedFirstUpdateRef.current) {
+                  console.log('[WS] First probabilities received:', {
+                    emotion: data.emotion,
+                    probs: probsStr,
+                    array: [...newProbs]
+                  });
+                  hasLoggedFirstUpdateRef.current = true;
+                } else if (valuesChanged) {
+                  console.log('[WS] VALUES CHANGED!', {
+                    emotion: data.emotion,
+                    oldProbs: prevStr,
+                    newProbs: probsStr,
+                    oldArray: [...prevProbs],
+                    newArray: [...newProbs]
+                  });
+                }
+                
+                // Always update ref with new values (for next comparison)
+                prevProbsRef.current = [...newProbs];
+                // Always update state (for debug panel)
+                setProbabilities(newProbs);
+              }
+            } else {
+              console.warn('[WS] Invalid probabilities format:', {
+                probabilities: data.probabilities,
+                isArray: Array.isArray(data.probabilities),
+                length: data.probabilities?.length
+              });
+            }
+            
+            // Update emotion
+            if (data.emotion) {
+              // Map backend emotion labels to frontend emotion indices
+              // Model 2.1 labels: calm, happy, angry, neutral
+              // Frontend indices: 0=Neutral, 1=Calm, 2=Happy, 3=Sad, 4=Angry
+              let newIndex = 0;
+              switch (data.emotion.toLowerCase()) {
+                case 'neutral': newIndex = 0; break;
+                case 'calm': newIndex = 1; break;
+                case 'happy': newIndex = 2; break;
+                case 'sad': newIndex = 3; break;
+                case 'angry': newIndex = 4; break;
+                default: break;
+              }
+              setPendingEmotionIndex(newIndex);
+            }
+          } catch (e) {
+            console.error("Error parsing WebSocket message:", e);
           }
-          setPendingEmotionIndex(newIndex);
+        };
+
+        ws.onerror = (error) => {
+          // Error will also trigger onclose, so we handle reconnection there
+          console.warn("WebSocket error:", error);
+        };
+
+        ws.onclose = (event) => {
+          console.log("WebSocket closed", event.code, event.reason);
+          
+          // Only attempt reconnect if we haven't exceeded max attempts
+          if (reconnectAttempts < maxReconnectAttempts) {
+            const delay = Math.min(baseReconnectDelay * Math.pow(2, reconnectAttempts), 30000); // Exponential backoff, max 30s
+            reconnectAttempts++;
+            console.log(`Attempting to reconnect in ${delay}ms (attempt ${reconnectAttempts}/${maxReconnectAttempts})...`);
+            
+            reconnectTimeout = setTimeout(() => {
+              connect();
+            }, delay);
+          } else {
+            console.warn("Max reconnection attempts reached. WebSocket will not reconnect. Please ensure the backend server is running.");
+          }
+        };
+      } catch (error) {
+        console.error("Failed to create WebSocket connection:", error);
+        // Retry connection after delay
+        if (reconnectAttempts < maxReconnectAttempts) {
+          const delay = Math.min(baseReconnectDelay * Math.pow(2, reconnectAttempts), 30000);
+          reconnectAttempts++;
+          reconnectTimeout = setTimeout(() => {
+            connect();
+          }, delay);
         }
-      } catch (e) {
-        console.error("Error parsing WebSocket message:", e);
       }
     };
 
-    ws.onerror = (error) => {
-      console.error("WebSocket error:", error);
-    };
+    // Initial connection
+    connect();
 
     return () => {
-      ws.close();
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+      }
+      if (ws) {
+        ws.close();
+      }
     };
   }, []);
 
@@ -120,13 +223,24 @@ function App() {
   };
 
   // Klawiatura (Symulacja EEG)
-  // N=Neutral, C=Calm, H=Happy, S=Sad, A=Angry
+  // N=Neutral, C=Calm, H=Happy, S=Sad, A=Angry, D=Debug Mode
   useEffect(() => {
     const handleKeyDown = (event) => {
       // Global Spacebar Pause/Play
       if (event.code === 'Space') {
         event.preventDefault(); // Prevent scrolling
         setPlay(prev => !prev);
+        return;
+      }
+
+      // Debug Mode Toggle (D key)
+      if (event.key.toLowerCase() === 'd') {
+        event.preventDefault();
+        setDebugMode(prev => {
+          const newMode = !prev;
+          console.log(`Debug Mode: ${newMode ? 'ON' : 'OFF'}`);
+          return newMode;
+        });
         return;
       }
 
@@ -192,8 +306,13 @@ function App() {
         {/* HEADER (LOGO + DISCONNECT) */}
         <div className="absolute top-0 left-0 right-0 z-50 flex justify-between items-center p-6 pointer-events-none">
           {/* LOGO */}
-          <div className="pointer-events-auto select-none">
+          <div className="pointer-events-auto select-none relative">
             <img src="/logo_full.png" alt="Oscillate Logo" className="h-40 md:h-56 w-auto opacity-90" />
+            {debugMode && (
+              <div className="absolute -bottom-2 left-0 bg-yellow-500/90 text-black text-xs font-bold px-2 py-1 rounded">
+                DEBUG MODE (Press D to toggle)
+              </div>
+            )}
           </div>
 
           {/* DISCONNECT BUTTON */}
@@ -218,7 +337,19 @@ function App() {
 
 
         <div className="absolute inset-0 z-0">
-          <Canvas camera={{ position: [0, 0, 5], fov: 60 }}>
+          <Canvas 
+            camera={{ position: [0, 0, 5], fov: 60 }}
+            gl={{ 
+              antialias: true,
+              alpha: false,
+              powerPreference: "high-performance",
+              stencil: false,
+              depth: true,
+              logarithmicDepthBuffer: false,
+              // Add robustness level to suppress warning
+              failIfMajorPerformanceCaveat: false
+            }}
+          >
             <color attach="background" args={['#050505']} />
             <ambientLight intensity={0.5} />
             <pointLight position={[10, 10, 10]} intensity={1} />
@@ -277,7 +408,18 @@ function App() {
 
             {/* TŁO Z GWIAZDAMI (DÓŁ) */}
             <div className="absolute inset-0 z-0">
-              <Canvas camera={{ position: [0, 0, 5], fov: 60 }}>
+              <Canvas 
+                camera={{ position: [0, 0, 5], fov: 60 }}
+                gl={{ 
+                  antialias: true,
+                  alpha: false,
+                  powerPreference: "high-performance",
+                  stencil: false,
+                  depth: true,
+                  logarithmicDepthBuffer: false,
+                  failIfMajorPerformanceCaveat: false
+                }}
+              >
                 <color attach="background" args={['#000000']} />
                 <BackgroundParticles color={currentEmotion.color} />
               </Canvas>
@@ -323,16 +465,28 @@ function App() {
 
                       {/* Song List Preview */}
                       <div className="space-y-2 mt-2">
-                        {(playlistTracks[playlist.uri] || []).slice(0, 3).map((song, idx) => (
-                          <div key={idx} className="flex items-center justify-between text-xs group/song">
-                            <span className="text-gray-300 font-medium group-hover/song:text-white transition-colors truncate max-w-[70%]">
-                              {song.title}
-                            </span>
-                            <span className="text-gray-500 group-hover/song:text-gray-400 transition-colors truncate max-w-[25%]">
-                              {song.artist}
-                            </span>
+                        {playlistTracks[playlist.uri] ? (
+                          playlistTracks[playlist.uri].length > 0 ? (
+                            playlistTracks[playlist.uri].slice(0, 3).map((song, idx) => (
+                              <div key={idx} className="flex items-center justify-between text-xs group/song">
+                                <span className="text-gray-300 font-medium group-hover/song:text-white transition-colors truncate max-w-[70%]">
+                                  {song.title}
+                                </span>
+                                <span className="text-gray-500 group-hover/song:text-gray-400 transition-colors truncate max-w-[25%]">
+                                  {song.artist}
+                                </span>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-xs text-gray-500 italic">
+                              Playlist unavailable or empty
+                            </div>
+                          )
+                        ) : (
+                          <div className="text-xs text-gray-600 italic">
+                            Loading tracks...
                           </div>
-                        ))}
+                        )}
                       </div>
                     </div>
 
@@ -348,6 +502,11 @@ function App() {
           </div>
         )
       }
+
+      {/* DEBUG PANEL */}
+      {debugMode && (
+        <DebugPanel probabilities={probabilities} isMock={isMock} />
+      )}
 
       {/* 3. ODTWARZACZ (FIXED) */}
       {

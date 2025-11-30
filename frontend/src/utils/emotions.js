@@ -30,7 +30,7 @@ export const emotions = [
         playlists: [
             {
                 title: 'Instrumental',
-                uri: 'spotify:playlist:37i9dQZF1DX4sWSpwq3LiO', // Calm Vibes
+                uri: 'spotify:playlist:37i9dQZF1DX4sWSpwq3LiO', // NOTE: This playlist returns 404 - needs to be replaced with a valid playlist URI
                 songs: []
             },
             {
@@ -109,7 +109,7 @@ export const emotions = [
             },
             {
                 title: 'For Kids',
-                uri: 'spotify:playlist:37i9dQZF1DXaImRpG7HXqp', // Kids Dance Party (Generic)
+                uri: 'spotify:playlist:37i9dQZF1DXaImRpG7HXqp', // NOTE: This playlist returns 404 - needs to be replaced with a valid playlist URI
                 songs: []
             }
         ]
