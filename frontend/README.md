@@ -1,3 +1,39 @@
+# Emotion Music Recommender Frontend
+
+React + Vite frontend for the Neurohackathon emotion-based music recommendation system.
+
+## Setup
+
+1. Install dependencies:
+```bash
+npm install
+```
+
+2. Create a `.env` file in the `frontend` directory:
+```bash
+VITE_SPOTIFY_CLIENT_ID=your_spotify_client_id_here
+VITE_SPOTIFY_REDIRECT_URI=http://127.0.0.1:5173/
+```
+
+3. Get your Spotify Client ID:
+   - Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+   - Create a new app
+   - Copy the Client ID to your `.env` file
+   - Add `http://127.0.0.1:5173/` as a redirect URI in your Spotify app settings
+
+4. Run the development server:
+```bash
+npm run dev
+```
+
+## Building for Production
+
+```bash
+npm run build
+```
+
+---
+
 # React + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.

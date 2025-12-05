@@ -12,8 +12,10 @@ import { redirectToAuthCodeFlow, getAccessToken } from './utils/auth';
 import { fetchPlaylistTracks } from './utils/spotify';
 
 // --- KONFIGURACJA ---
-const CLIENT_ID = "00ea48b1e2144865828b75c3d4746b7c"; // <--- PAMIĘTAJ O WPISANIU ID!
-const REDIRECT_URI = "http://127.0.0.1:5173/";
+// Get Spotify Client ID from environment variable
+// Create a .env file in the frontend directory with: VITE_SPOTIFY_CLIENT_ID=your_client_id_here
+const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID || "";
+const REDIRECT_URI = import.meta.env.VITE_SPOTIFY_REDIRECT_URI || "http://127.0.0.1:5173/";
 const SCOPES = ["streaming", "user-read-email", "user-read-private", "user-read-playback-state", "user-modify-playback-state"];
 
 function App() {
@@ -219,6 +221,11 @@ function App() {
   }, []);
 
   const handleLogin = () => {
+    if (!CLIENT_ID) {
+      alert("Spotify Client ID is not configured. Please create a .env file with VITE_SPOTIFY_CLIENT_ID=your_client_id");
+      console.error("VITE_SPOTIFY_CLIENT_ID is not set in environment variables");
+      return;
+    }
     redirectToAuthCodeFlow(CLIENT_ID, REDIRECT_URI, SCOPES);
   };
 
