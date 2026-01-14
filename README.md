@@ -132,7 +132,7 @@ The backend will automatically detect and connect to the stream.
 
 ### Emotion Detection Pipeline
 
-1. **EEG Data Acquisition**: Receives 250Hz EEG data from 4 channels (AF3, AF4, O1, O2)
+1. **EEG Data Acquisition**: Receives 125Hz EEG data from 4 channels (AF3, AF4, O1, O2)
 2. **Feature Extraction**: Computes relative band powers for 5 frequency bands:
    - Delta (0.5-4 Hz)
    - Theta (4-8 Hz)
